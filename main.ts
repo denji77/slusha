@@ -1,4 +1,8 @@
+// Load environment variables from .env file before any other imports
+import './lib/env.ts';
+
 import Werror from './lib/werror.ts';
+
 import logger from './lib/logger.ts';
 import resolveConfig, { Config, safetySettings } from './lib/config.ts';
 import setupBot from './lib/telegram/setup-bot.ts';
@@ -7,7 +11,7 @@ import { loadMemory, ReplyTo } from './lib/memory.ts';
 
 import { APICallError, CoreMessage, generateText, Output } from 'ai';
 import { google } from '@ai-sdk/google';
-
+// Deno.env.set("AI_TOKEN", "AIzaSyDbMM8pHtJ9IPP8yqkv0TdFbYgXmT5pzZg");
 import {
     createNameMatcher,
     deleteOldFiles,
@@ -51,27 +55,27 @@ bot.command('start', (ctx) => ctx.reply(config.startMessage));
 
 bot.command('forget', async (ctx) => {
     ctx.m.clear();
-    await ctx.reply('История очищена');
+    await ctx.reply('History cleared');
 });
 
 bot.command('lobotomy', async (ctx) => {
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            return ctx.reply('Эта команда только для администраторов чата');
+            return ctx.reply('This command is only for chat administrators');
         }
     }
 
     ctx.m.clear();
     ctx.m.getChat().notes = [];
     ctx.m.getChat().memory = undefined;
-    await ctx.reply('История очищена');
+    await ctx.reply('History cleared');
 });
 
 bot.command('changelog', async (ctx) => {
     await replyWithMarkdown(
         ctx,
-        '```js\n// TODO: написать что нового```\n\nМожешь пока чекнуть комиты что-ли - https://github.com/sleroq/slusha/commits/master',
+        '```js\n// TODO: write what\'s new```\n\nYou can check the commits - https://github.com/sleroq/slusha/commits/master',
     );
 });
 
@@ -85,7 +89,7 @@ bot.command('model', (ctx) => {
         !config.adminIds || !ctx.msg.from ||
         !config.adminIds.includes(ctx.msg.from.id)
     ) {
-        return ctx.reply('Not bot admin ' + ctx.msg.from?.id);
+        return ctx.reply('Not a bot admin ' + ctx.msg.from?.id);
     }
 
     const args = ctx.msg.text
@@ -115,40 +119,37 @@ bot.command('random', async (ctx) => {
         .map((arg) => arg.trim())
         .filter((arg) => arg !== '');
 
-    const currentValue = ctx.m.getChat().randomReplyProbability ??
-        config.randomReplyProbability;
+    const currentValue = ctx.m.getChat().randomReplyProbability ?? config.randomReplyProbability;
 
     if (args.length === 1) {
         return replyWithMarkdown(
             ctx,
-            'Укажи число от 0 до 50 вторым аргументом, чтобы настроить частоту случайных ответов: `/random <number>`\n' +
-                `Сейчас стоит \`${currentValue}\`%\n` +
-                '`/random default` - поставить значение по умолчанию',
+            'Specify a number from 0 to 50 as the second argument to set the frequency of random replies: `/random <number>`\n' +
+                `Currently set to \`${currentValue}\`%\n` +
+                '`/random default` - set to default value',
         );
     }
 
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            return ctx.reply('Эта команда только для администраторов чата');
+            return ctx.reply('This command is only for chat administrators');
         }
     }
 
     const newValue = args[1];
     if (newValue === 'default') {
         ctx.m.getChat().randomReplyProbability = undefined;
-        return ctx.reply('Шанс случайных ответов обновлен');
+        return ctx.reply('Random reply chance updated');
     }
 
     const probability = parseFloat(newValue);
     if (isNaN(probability) || probability < 0 || probability > 50) {
-        return ctx.reply(
-            'Нераспарсилось число. Попробуй снова',
-        );
+        return ctx.reply('Could not parse the number. Try again');
     }
 
     ctx.m.getChat().randomReplyProbability = probability;
-    return ctx.reply(`Новая вероятность ответа: ${probability}%`);
+    return ctx.reply(`New reply probability: ${probability}%`);
 });
 
 bot.command('summary', (ctx) => {
@@ -156,7 +157,7 @@ bot.command('summary', (ctx) => {
     const notes = ctx.m.getChat().notes.slice(-config.maxNotesToStore - 2);
 
     if (notes.length === 0) {
-        return ctx.reply('Пока маловато сообщений прошло, сам прочитай');
+        return ctx.reply('Not enough messages have passed, read it yourself');
     }
 
     return ctx.reply(notes.join('\n').replaceAll('\n\n', '\n'));
@@ -166,9 +167,9 @@ bot.command('hatemode', async (ctx) => {
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            const msg = 'Эта команда только для администраторов чата' + '\n' +
-                `Но если что, хейт сейчас ${
-                    ctx.m.getChat().hateMode ? 'включен' : 'выключен'
+            const msg = 'This command is only for chat administrators' + '\n' +
+                `But just so you know, hate mode is currently ${
+                    ctx.m.getChat().hateMode ? 'enabled' : 'disabled'
                 }`;
             return ctx.reply(msg);
         }
@@ -177,7 +178,7 @@ bot.command('hatemode', async (ctx) => {
     ctx.m.getChat().hateMode = !ctx.m.getChat().hateMode;
 
     return ctx.reply(
-        `хейт теперь ${ctx.m.getChat().hateMode ? 'включен' : 'выключен'}`,
+        `Hate mode is now ${ctx.m.getChat().hateMode ? 'enabled' : 'disabled'}`,
     );
 });
 
@@ -219,7 +220,7 @@ bot.on('message', (ctx, next) => {
         return next();
     }
 
-    // Mentined bot's name
+    // Mentioned bot's name
     if (msg.text.includes(bot.botInfo.username)) {
         return next();
     }
@@ -265,8 +266,7 @@ bot.on('message', (ctx, next) => {
         return next();
     }
 
-    const randomReplyProbability = ctx.m.getChat().randomReplyProbability ??
-        config.randomReplyProbability;
+    const randomReplyProbability = ctx.m.getChat().randomReplyProbability ?? config.randomReplyProbability;
 
     if (probability(randomReplyProbability)) {
         logger.info('Replying because of random reply probability');
@@ -305,7 +305,7 @@ bot.use(limit(
         // This is called when the limit is exceeded.
         onLimitExceeded: (ctx) => {
             logger.warn('Skipping message because rate limit exceeded');
-            return ctx.reply('Рейтлимитим тебя');
+            return ctx.reply('Ratelimiting you');
         },
 
         keyGenerator: (ctx) => {
@@ -320,7 +320,6 @@ bot.use(limit(
 
 // Get response from AI
 bot.on('message', async (ctx) => {
-
     const messages: CoreMessage[] = [];
 
     let prompt = config.ai.prePrompt + '\n\n';
@@ -364,7 +363,7 @@ bot.on('message', async (ctx) => {
 
     if (ctx.chat.type === 'private') {
         chatInfoMsg +=
-            `\nЛичный чат с ${ctx.from.first_name} (@${ctx.from.username})`;
+            `\nPrivate chat with ${ctx.from.first_name} (@${ctx.from.username})`;
     } else {
         const activeMembers = ctx.m.getActiveMembers();
         if (activeMembers.length > 0) {
@@ -381,7 +380,7 @@ bot.on('message', async (ctx) => {
         }
     }
 
-    // If we have nots, add them to messages
+    // If we have notes, add them to messages
     if (ctx.m.getChat().notes.length > 0) {
         chatInfoMsg += `\n\nChat notes:\n${ctx.m.getChat().notes.join('\n')}`;
     }
@@ -396,8 +395,7 @@ bot.on('message', async (ctx) => {
         content: chatInfoMsg,
     });
 
-    const messagesToPass = ctx.m.getChat().messagesToPass ??
-        config.ai.messagesToPass;
+    const messagesToPass = ctx.m.getChat().messagesToPass ?? config.ai.messagesToPass;
 
     let history = [];
     try {
@@ -425,7 +423,7 @@ bot.on('message', async (ctx) => {
 
     let finalPrompt = config.ai.finalPrompt;
     if (ctx.info.userToReply) {
-        finalPrompt += ` Ответь на сообщение от ${ctx.info.userToReply}.`;
+        finalPrompt += ` Reply to the message from ${ctx.info.userToReply}.`;
     }
 
     messages.push({
@@ -469,7 +467,7 @@ bot.on('message', async (ctx) => {
 
                 if (err?.promptFeedback?.blockReason) {
                     return ctx.reply(
-                        'API провайдер запрещает тебе отвечать. Возможно это из-за персонажа: ' +
+                        'API provider forbids you to respond. This may be due to the character: ' +
                             err.promptFeedback.blockReason,
                     );
                 }
@@ -635,5 +633,9 @@ async function gracefulShutdown() {
 }
 
 // Save memory on exit
-Deno.addSignalListener('SIGINT', gracefulShutdown);
-Deno.addSignalListener('SIGTERM', gracefulShutdown);
+Deno.addSignalListener('SIGINT', gracefulShutdown); // Keep SIGINT, it works on Windows
+
+// Add SIGTERM listener only if NOT on Windows
+if (Deno.build.os !== "windows") {
+  Deno.addSignalListener('SIGTERM', gracefulShutdown);
+}

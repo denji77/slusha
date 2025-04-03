@@ -7,7 +7,7 @@ import { Composer, InlineKeyboard } from 'grammy';
 const bot = new Composer<SlushaContext>();
 
 function formatOptOutUsers(users: OptOutUser[]) {
-    let message = '\n\n Пользователи, которых не видит слюша:\n';
+    let message = '\n\n Users that Slusha will no longer see:\n';
 
     message += users.map((u) => {
         if (u.username) {
@@ -26,8 +26,8 @@ bot.command('optout', (ctx) => {
     }
 
     let message =
-        '<b>Слюша больше не будет видеть твои сообщения в этом чате.</b>\n' +
-        '<span class="tg-spoiler">за исключением прямого ответа другого пользователя на твое сообщение с упоминанием слюши</span>';
+        '<b>Slusha will no longer see your messages in this chat.</b>\n' +
+        '<span class="tg-spoiler">except for direct replies from other users to your message mentioning Slusha</span>';
 
     const optOutUsers = ctx.m.getChat().optOutUsers;
 
@@ -45,7 +45,7 @@ bot.command('optout', (ctx) => {
 
     return replyWithHTML(ctx, message, {
         reply_markup: new InlineKeyboard().text(
-            'Вернуться',
+            'Return',
             `opt-in ${ctx.from.id}`,
         ),
         link_preview_options: {
@@ -73,8 +73,8 @@ bot.command('optin', (ctx) => {
 
 async function optIn(ctx: SlushaContext, id: number, reply: boolean) {
     const wasOptedIn = ctx.m.getChat().optOutUsers.some((u) => u.id === id);
-    const verb = wasOptedIn ? 'снова' : 'уже';
-    let message = `Ура, Слюша ${verb} видит твои сообщения`;
+    const verb = wasOptedIn ? 'again' : 'already';
+    let message = `Yay, Slusha ${verb} sees your messages`;
 
     ctx.m.getChat().optOutUsers = ctx.m.getChat().optOutUsers.filter((u) =>
         u.id !== id

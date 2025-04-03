@@ -29,24 +29,24 @@ bot.command('character', async (ctx) => {
 
     if (textParts.length > 1) {
         replyText +=
-            'Тыкни на кнопку поиска чтобы найти персонажа, не нужно вводить в команду\n\n';
+            'Click the search button to find a character, no need to type in the command\n\n';
     }
 
     let keyboard = new InlineKeyboard()
-        .switchInlineCurrent('Поиск', `@${ctx.chat.id} `);
+        .switchInlineCurrent('Search', `@${ctx.chat.id} `);
 
     const character = ctx.m.getChat().character;
 
-    const name = character?.name ?? 'Слюша';
+    const name = character?.name ?? 'Slusha';
 
-    replyText = `${replyText}\n\nТекущий персонаж: ${name}.\n`;
+    replyText = `${replyText}\n\nCurrent character: ${name}.\n`;
 
     if (character) {
-        keyboard = keyboard.text('Вернуть Слюшу', `set ${ctx.chat.id} default`);
-        replyText += `Имена в чате: ${character.names.join(', ')}\n`;
+        keyboard = keyboard.text('Return Slusha', `set ${ctx.chat.id} default`);
+        replyText += `Names in chat: ${character.names.join(', ')}\n`;
     }
 
-    replyText += `\nНайдите персонажа из Chub.ai чтобы установить его в чат`;
+    replyText += `\nFind a character from Chub.ai to set it in the chat`;
 
     // Reply with search button
     await ctx.reply(
@@ -328,12 +328,12 @@ bot.callbackQuery(/set.*/, async (ctx) => {
             .switchInlineCurrent('Поиск', `@${chatId} `);
 
         if (chat.character === undefined) {
-            return ctx.answerCallbackQuery('Слюша уже стоит');
+            return ctx.answerCallbackQuery('Slusha is already set');
         } else {
             slushaBackKeyboard = new InlineKeyboard()
                 .switchInlineCurrent('Поиск', `@${chatId} `)
                 .text(
-                    `Вернуть ${chat.character.name}`,
+                    `Return ${chat.character.name}`,
                     `set ${chatId} ${chat.character.id}`,
                 );
         }
@@ -342,10 +342,10 @@ bot.callbackQuery(/set.*/, async (ctx) => {
 
         try {
             await Promise.all([
-                ctx.answerCallbackQuery('Установлена Слюша'),
+                ctx.answerCallbackQuery('Slusha is set'),
                 ctx.api.sendMessage(
                     chatId,
-                    `${ctx.from.first_name} вернул Слюшу`,
+                    `${ctx.from.first_name} returned Slusha`,
                     {
                         reply_markup: slushaBackKeyboard,
                     },
@@ -364,7 +364,7 @@ bot.callbackQuery(/set.*/, async (ctx) => {
     }
 
     if (chat.character?.id === characterId) {
-        return ctx.answerCallbackQuery('Этот персонаж уже установлен');
+        return ctx.answerCallbackQuery('This character is already set');
     }
 
     const keyboardProgress = new InlineKeyboard()
@@ -426,8 +426,8 @@ bot.callbackQuery(/set.*/, async (ctx) => {
     chat.character = { ...character, names };
 
     const keyboard = new InlineKeyboard()
-        .text('Вернуть Слюшу', `set ${chatId} default`)
-        .text('Установить повторно', `set ${chatId} ${characterId}`)
+        .text('Return Slusha', `set ${chatId} default`)
+        .text('Set again', `set ${chatId} ${characterId}`)
         .switchInlineCurrent('Поиск', `@${chatId} `);
 
     try {
@@ -447,15 +447,15 @@ bot.callbackQuery(/set.*/, async (ctx) => {
     }
 
     const keyboard2 = new InlineKeyboard()
-        .text('Вернуть Слюшу', `set ${chatId} default`)
+        .text('Return Slusha', `set ${chatId} default`)
         .switchInlineCurrent('Поиск', `@${chatId} `);
 
     try {
         await ctx.api.sendMessage(
             chatId,
-            `${ctx.from.first_name} установил персонажа ${character.name}.\n` +
-                `Имена в чате: ${chat.character.names.join(', ')}` +
-                '\n\nМожет иметь смысл стереть память (/lobotomy), если это мешает новому персонажу.',
+            `${ctx.from.first_name} set the character ${character.name}.\n` +
+                `Names in chat: ${chat.character.names.join(', ')}` +
+                '\n\nIt might make sense to delete memory (/lobotomy), if it interferes with the new character.',
             {
                 reply_markup: keyboard2,
             },

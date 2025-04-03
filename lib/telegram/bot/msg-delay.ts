@@ -10,23 +10,23 @@ export default function msgDelay(config: Config) {
     bot.on('message', (ctx, next) => {
         async function handleNext() {
             try {
-                //Start typing indicator before processing the message
+                // Start typing indicator before processing the message
                 const typing = doTyping(ctx, logger);
                 
-                //Store the original reply methods
+                // Store the original reply methods
                 const originalReply = ctx.reply;
                 
-                //Override the reply method to stop typing when a response is sent
+                // Override the reply method to stop typing when a response is sent
                 ctx.reply = async (...args) => {
-                    //Stop the typing indicator before sending response
+                    // Stop typing indicator before sending response
                     typing.abort();
-                    //Call the original reply method
+                    // Call the original reply method
                     return await originalReply.apply(ctx, args);
                 };
                 
                 await next();
                 
-                //If we got here and typing still active, stop plzz
+                // If we got here and typing is still active, stop it
                 typing.abort();
             } catch (error) {
                 logger.error('Could not handle message: ', error);
