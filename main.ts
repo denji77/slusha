@@ -1,16 +1,17 @@
+// main.ts
 // Load environment variables from .env file before any other imports
 import './lib/env.ts';
 
 import Werror from './lib/werror.ts';
 
-import logger from './lib/logger.ts';
-import resolveConfig, { Config, safetySettings } from './lib/config.ts';
-import setupBot from './lib/telegram/setup-bot.ts';
-import { run } from '@grammyjs/runner';
-import { loadMemory, ReplyTo } from './lib/memory.ts';
+import logger from './lib/logger.ts'; // Assuming this is a local module
+import resolveConfig, { Config, safetySettings } from './lib/config.ts'; // Assuming local
+import setupBot from './lib/telegram/setup-bot.ts'; // Assuming local
+import { run } from 'npm:@grammyjs/runner'; // CORRECTED
+import { loadMemory, ReplyTo } from './lib/memory.ts'; // Assuming local
 
-import { APICallError, CoreMessage, generateText, Output } from 'ai';
-import { google } from '@ai-sdk/google';
+import { APICallError, CoreMessage, generateText, Output } from 'npm:ai'; // CORRECTED (ensure 'ai' is the Vercel AI SDK if intended)
+import { google } from 'npm:@ai-sdk/google'; // CORRECTED
 
 import {
     createNameMatcher,
@@ -22,21 +23,21 @@ import {
     probability,
     sliceMessage,
     testMessage,
-} from './lib/helpers.ts';
+} from './lib/helpers.ts'; // Assuming local
 import {
     doTyping,
     replyGeneric,
     replyWithMarkdown,
     replyWithMarkdownId,
-} from './lib/telegram/helpers.ts';
-import { limit } from 'grammy_ratelimiter';
-import character from './lib/telegram/bot/character.ts';
-import optOut from './lib/telegram/bot/opt-out.ts';
-import msgDelay from './lib/telegram/bot/msg-delay.ts';
-import notes from './lib/telegram/bot/notes.ts';
-import { makeHistoryV2 } from './lib/history.ts';
-import z from 'zod';
-import contextCommand from './lib/telegram/bot/context.ts';
+} from './lib/telegram/helpers.ts'; // Assuming local
+import { limit } from 'npm:@grammyjs/ratelimiter'; // CORRECTED
+import character from './lib/telegram/bot/character.ts'; // Assuming local
+import optOut from './lib/telegram/bot/opt-out.ts'; // Assuming local
+import msgDelay from './lib/telegram/bot/msg-delay.ts'; // Assuming local
+import notes from './lib/telegram/bot/notes.ts'; // Assuming local
+import { makeHistoryV2 } from './lib/history.ts'; // Assuming local
+import z from 'npm:zod'; // CORRECTED
+import contextCommand from './lib/telegram/bot/context.ts'; // Assuming local
 
 let config: Config;
 try {

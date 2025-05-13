@@ -1,6 +1,18 @@
-import { Logger } from "https://deno.land/x/logger@1.2.0/mod.ts";
+import * as log from "https://deno.land/std@0.192.0/log/mod.ts";
 
-const logger = new Logger();
-await logger.initFileLogger('log', { rotate: true });
+await log.setup({
+  handlers: {
+    file: new log.handlers.FileHandler("INFO", {
+      filename: "./log/app.log",
+      formatter: "{levelName} {msg}",
+    }),
+  },
+  loggers: {
+    default: {
+      level: "INFO",
+      handlers: ["file"],
+    },
+  },
+});
 
-export default logger;
+export default log;
