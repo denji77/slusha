@@ -1,17 +1,47 @@
 // main.ts
-// Load environment variables from .env file before any other imports
-import './lib/env.ts';
 
+// Step 1: Ensure environment is ready (either from Vercel or local .env via lib/env.ts)
+import './lib/env.ts'; // This script should gracefully handle missing .env on Vercel
+
+// Step 2: Critical Environment Variable Checks
+// Define which environment variables are absolutely essential for the bot to run.
+const CRITICAL_ENV_VARS: string[] = [
+    'TELEGRAM_BOT_TOKEN',
+    'AI_TOKEN',
+    // Add any other absolutely essential variables here, e.g.,
+    // 'DATABASE_URL', if your memory persistence relies on it from the start.
+];
+
+let allCriticalVarsPresent = true;
+for (const varName of CRITICAL_ENV_VARS) {
+    if (Deno.env.get(varName) === undefined) {
+        // Use console.error here, as the main logger might not be initialized yet,
+        // or its initialization might depend on these very environment variables.
+        console.error(
+            `CRITICAL ERROR: Required environment variable "${varName}" is not set. ` +
+            `Please ensure it is configured in your Vercel project settings or local .env file.`,
+        );
+        allCriticalVarsPresent = false;
+    }
+}
+
+if (!allCriticalVarsPresent) {
+    console.error(
+        'One or more critical environment variables are missing. Bot cannot start. Exiting.',
+    );
+    Deno.exit(1); // Exit immediately if critical configuration is absent.
+}
+
+// Step 3: Import other modules now that critical environment variables are confirmed.
 import Werror from './lib/werror.ts';
+import logger from './lib/logger.ts'; // Assuming lib/logger.ts is correctly set up
+import resolveConfig, { Config, safetySettings } from './lib/config.ts';
+import setupBot from './lib/telegram/setup-bot.ts';
+import { run } from 'npm:@grammyjs/runner';
+import { loadMemory, ReplyTo } from './lib/memory.ts';
 
-import logger from './lib/logger.ts'; // Assuming this is a local module
-import resolveConfig, { Config, safetySettings } from './lib/config.ts'; // Assuming local
-import setupBot from './lib/telegram/setup-bot.ts'; // Assuming local
-import { run } from 'npm:@grammyjs/runner'; // CORRECTED
-import { loadMemory, ReplyTo } from './lib/memory.ts'; // Assuming local
-
-import { APICallError, CoreMessage, generateText, Output } from 'npm:ai'; // CORRECTED (ensure 'ai' is the Vercel AI SDK if intended)
-import { google } from 'npm:@ai-sdk/google'; // CORRECTED
+import { APICallError, CoreMessage, generateText, Output } from 'npm:ai';
+import { google } from 'npm:@ai-sdk/google';
 
 import {
     createNameMatcher,
@@ -23,34 +53,57 @@ import {
     probability,
     sliceMessage,
     testMessage,
-} from './lib/helpers.ts'; // Assuming local
+} from './lib/helpers.ts';
 import {
     doTyping,
     replyGeneric,
     replyWithMarkdown,
     replyWithMarkdownId,
-} from './lib/telegram/helpers.ts'; // Assuming local
-import { limit } from 'npm:@grammyjs/ratelimiter'; // CORRECTED
-import character from './lib/telegram/bot/character.ts'; // Assuming local
-import optOut from './lib/telegram/bot/opt-out.ts'; // Assuming local
-import msgDelay from './lib/telegram/bot/msg-delay.ts'; // Assuming local
-import notes from './lib/telegram/bot/notes.ts'; // Assuming local
-import { makeHistoryV2 } from './lib/history.ts'; // Assuming local
-import z from 'npm:zod'; // CORRECTED
-import contextCommand from './lib/telegram/bot/context.ts'; // Assuming local
+} from './lib/telegram/helpers.ts';
+import { limit } from 'npm:@grammyjs/ratelimiter';
+import character from './lib/telegram/bot/character.ts';
+import optOut from './lib/telegram/bot/opt-out.ts';
+import msgDelay from './lib/telegram/bot/msg-delay.ts';
+import notes from './lib/telegram/bot/notes.ts';
+import { makeHistoryV2 } from './lib/history.ts';
+import z from 'npm:zod';
+import contextCommand from './lib/telegram/bot/context.ts';
+
+// --- Application Initialization ---
 
 let config: Config;
 try {
+    logger.info('Resolving application configuration...');
     config = await resolveConfig();
+    logger.info('Configuration resolved successfully.');
 } catch (error) {
-    logger.error('Config error: ', error);
+    logger.error('Failed to resolve application configuration:', error);
     Deno.exit(1);
 }
 
-const memory = await loadMemory();
-logger.info('Memory loaded');
+let memory; // Declare memory here so it's in scope for intervals if loadMemory is async
+try {
+    logger.info('Loading memory...');
+    memory = await loadMemory(); // Assuming loadMemory returns the memory instance
+    logger.info('Memory loaded successfully.');
+} catch (error) {
+    // The original error was "logger.warn is not a function" here.
+    // This assumes logger IS correctly set up now. If not, this line itself might fail.
+    logger.error('Failed to load memory:', error);
+    Deno.exit(1);
+}
 
-const bot = await setupBot(config, memory);
+let bot;
+try {
+    logger.info('Setting up Telegram bot...');
+    bot = await setupBot(config, memory);
+    logger.info('Telegram bot setup complete.');
+} catch (error) {
+    logger.error('Failed to set up Telegram bot:', error);
+    Deno.exit(1);
+}
+
+// --- Bot Command Handlers and Middleware ---
 
 bot.command('start', (ctx) => ctx.reply(config.startMessage));
 
@@ -66,11 +119,11 @@ bot.command('lobotomy', async (ctx) => {
             return ctx.reply('This command is only for chat administrators');
         }
     }
-
     ctx.m.clear();
-    ctx.m.getChat().notes = [];
-    ctx.m.getChat().memory = undefined;
-    await ctx.reply('History cleared');
+    const chatMemory = ctx.m.getChat();
+    chatMemory.notes = [];
+    chatMemory.memory = undefined;
+    await ctx.reply('Complete lobotomy successful. All chat-specific data wiped.');
 });
 
 bot.command('changelog', async (ctx) => {
@@ -85,42 +138,34 @@ bot.use(contextCommand);
 bot.use(character);
 
 bot.command('model', (ctx) => {
-    // Check if user is admin
     if (
         !config.adminIds || !ctx.msg.from ||
         !config.adminIds.includes(ctx.msg.from.id)
     ) {
-        return ctx.reply('Not a bot admin ' + ctx.msg.from?.id);
+        return ctx.reply(`Access denied. This command is for bot administrators. Your ID: ${ctx.msg.from?.id}`);
     }
 
-    const args = ctx.msg.text
-        .split(' ')
-        .map((arg) => arg.trim())
-        .filter((arg) => arg !== '');
+    const args = ctx.msg.text?.split(' ').map((arg) => arg.trim()).filter(Boolean) ?? [];
+    const chatMemory = ctx.m.getChat();
 
-    // If no parameter is passed, show current model
     if (args.length === 1) {
-        return ctx.reply(ctx.m.getChat().chatModel ?? config.ai.model);
+        return ctx.reply(`Current model: ${chatMemory.chatModel ?? config.ai.model}`);
     }
 
-    // If parameter is passed, set new model
     const newModel = args[1];
     if (newModel === 'default') {
-        ctx.m.getChat().chatModel = undefined;
-        return ctx.reply('Model reset');
+        chatMemory.chatModel = undefined;
+        return ctx.reply('AI model reset to default.');
     }
 
-    ctx.m.getChat().chatModel = newModel;
-    return ctx.reply(`Model set to ${newModel}`);
+    chatMemory.chatModel = newModel;
+    return ctx.reply(`AI model set to: ${newModel}`);
 });
 
 bot.command('random', async (ctx) => {
-    const args = ctx.msg.text
-        .split(' ')
-        .map((arg) => arg.trim())
-        .filter((arg) => arg !== '');
-
-    const currentValue = ctx.m.getChat().randomReplyProbability ?? config.randomReplyProbability;
+    const args = ctx.msg.text?.split(' ').map((arg) => arg.trim()).filter(Boolean) ?? [];
+    const chatMemory = ctx.m.getChat();
+    const currentValue = chatMemory.randomReplyProbability ?? config.randomReplyProbability;
 
     if (args.length === 1) {
         return replyWithMarkdown(
@@ -134,317 +179,229 @@ bot.command('random', async (ctx) => {
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            return ctx.reply('This command is only for chat administrators');
+            return ctx.reply('This command is only for chat administrators in group chats.');
         }
     }
 
     const newValue = args[1];
     if (newValue === 'default') {
-        ctx.m.getChat().randomReplyProbability = undefined;
-        return ctx.reply('Random reply chance updated');
+        chatMemory.randomReplyProbability = undefined;
+        return ctx.reply('Random reply probability reset to default.');
     }
 
-    const probability = parseFloat(newValue);
-    if (isNaN(probability) || probability < 0 || probability > 50) {
-        return ctx.reply('Could not parse the number. Try again');
+    const probabilityValue = parseFloat(newValue);
+    if (isNaN(probabilityValue) || probabilityValue < 0 || probabilityValue > 50) {
+        return ctx.reply('Invalid probability value. Please provide a number between 0 and 50.');
     }
 
-    ctx.m.getChat().randomReplyProbability = probability;
-    return ctx.reply(`New reply probability: ${probability}%`);
+    chatMemory.randomReplyProbability = probabilityValue;
+    return ctx.reply(`Random reply probability updated to: ${probabilityValue}%`);
 });
 
 bot.command('summary', (ctx) => {
-    ctx.m.getChat().lastUse = Date.now();
-    const notes = ctx.m.getChat().notes.slice(-config.maxNotesToStore - 2);
+    const chatMemory = ctx.m.getChat();
+    chatMemory.lastUse = Date.now();
+    const notesToDisplay = chatMemory.notes.slice(-config.maxNotesToStore - 2);
 
-    if (notes.length === 0) {
-        return ctx.reply('Not enough messages have passed, read it yourself');
+    if (notesToDisplay.length === 0) {
+        return ctx.reply('Not enough messages have passed for a summary, read it yourself!');
     }
-
-    return ctx.reply(notes.join('\n').replaceAll('\n\n', '\n'));
+    return ctx.reply(notesToDisplay.join('\n').replace(/\n\n/g, '\n'));
 });
 
 bot.command('hatemode', async (ctx) => {
+    const chatMemory = ctx.m.getChat();
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            const msg = 'This command is only for chat administrators' + '\n' +
-                `But just so you know, hate mode is currently ${
-                    ctx.m.getChat().hateMode ? 'enabled' : 'disabled'
-                }`;
-            return ctx.reply(msg);
+            return ctx.reply(
+                `This command is only for chat administrators.\n` +
+                `Hate mode is currently: ${chatMemory.hateMode ? 'enabled' : 'disabled'}.`,
+            );
         }
     }
-
-    ctx.m.getChat().hateMode = !ctx.m.getChat().hateMode;
-
+    chatMemory.hateMode = !chatMemory.hateMode;
     return ctx.reply(
-        `Hate mode is now ${ctx.m.getChat().hateMode ? 'enabled' : 'disabled'}`,
+        `Hate mode is now ${chatMemory.hateMode ? 'ENABLED' : 'disabled'}.`,
     );
 });
 
 bot.use(msgDelay(config));
-
 bot.use(notes(config, bot.botInfo.id));
 
-// Decide if we should reply to user
+// --- Message Filtering Logic ---
 bot.on('message', (ctx, next) => {
     const msg = ctx.m.getLastMessage();
+    if (!msg) return;
 
-    if (!msg) {
+    if (!msg.text && !msgTypeSupported(msg.info) && !msg.info.new_chat_members) {
         return;
     }
+    if (msg.info.via_bot?.id === bot.botInfo.id) return; // Ignore self
 
-    // Ignore if text is empty
-    if (
-        !msg.text &&
-        !msgTypeSupported(msg.info) &&
-        !msg.info.new_chat_members // React to new members joining TODO: add to supported types
-    ) {
-        return;
-    }
+    const chatMemory = ctx.m.getChat();
 
-    // Ignore if message is from itself
-    if (msg.info.via_bot?.id === bot.botInfo.id) {
-        return;
-    }
-
-    // Direct message
     if (ctx.msg.chat.type === 'private') {
-        ctx.m.getChat().lastUse = Date.now();
+        chatMemory.lastUse = Date.now();
         return next();
     }
-
-    // Direct reply to bot
     if (ctx.msg.reply_to_message?.from?.id === bot.botInfo.id) {
-        ctx.m.getChat().lastUse = Date.now();
+        chatMemory.lastUse = Date.now();
+        return next();
+    }
+    if (msg.text?.includes(bot.botInfo.username)) { // Check msg.text exists
+        chatMemory.lastUse = Date.now();
         return next();
     }
 
-    // Mentioned bot's name
-    if (msg.text.includes(bot.botInfo.username)) {
-        return next();
-    }
+    const characterNames = chatMemory.character?.names;
+    const namesToMatch = config.names.concat(characterNames ?? []);
+    const nameRegex = createNameMatcher(namesToMatch);
 
-    const characterNames = ctx.m.getChat().character?.names;
-    const names = config.names.concat(characterNames ?? []);
-    const nameRegex = createNameMatcher(names);
-
-    // Mentioned any of bot's aliases
-    if (
-        nameRegex.test(msg.text) &&
-        // Ignore forwarded messages with bot's name
+    if (msg.text && nameRegex.test(msg.text) && // Check msg.text exists
         !(msg.info.forward_origin?.type === 'user' &&
             msg.info.forward_origin.sender_user.id === bot.botInfo.id)
     ) {
-        ctx.m.getChat().lastUse = Date.now();
-        logger.info("Replying because of mentioned bot's name");
+        chatMemory.lastUse = Date.now();
+        logger.info(`Replying due to name mention in: "${sliceMessage(msg.text, 50)}"`);
         return next();
     }
 
-    if (
-        testMessage(config.tendToIgnore, msg.text) &&
-        // If message is longer than 25 symbols - maybe it's useful
+    if (msg.text && testMessage(config.tendToIgnore, msg.text) && // Check msg.text exists
         msg.text.length < 20 &&
         probability(config.tendToIgnoreProbability)
     ) {
-        // logger.info(
-        //     `Ignoring because of tend to ignore "${
-        //         sliceMessage(msg.text, 50)
-        //     }"`,
-        // );
-        return;
+        return; // Silently ignore
     }
 
-    if (
-        testMessage(config.tendToReply, msg.text) &&
+    if (msg.text && testMessage(config.tendToReply, msg.text) && // Check msg.text exists
         probability(config.tendToReplyProbability)
     ) {
-        logger.info(
-            `Replying because of tend to reply "${sliceMessage(msg.text, 50)}"`,
-        );
+        logger.info(`Replying due to tendToReply keyword in: "${sliceMessage(msg.text, 50)}"`);
         ctx.info.isRandom = true;
         return next();
     }
 
-    const randomReplyProbability = ctx.m.getChat().randomReplyProbability ?? config.randomReplyProbability;
-
-    if (probability(randomReplyProbability)) {
-        logger.info('Replying because of random reply probability');
+    const randomReplyProb = chatMemory.randomReplyProbability ?? config.randomReplyProbability;
+    if (probability(randomReplyProb)) {
+        logger.info('Replying due to random probability.');
         ctx.info.isRandom = true;
         return next();
     }
 });
 
-bot.use(limit(
-    {
-        // Allow only 1 message to be handled every 2 seconds.
-        timeFrame: 2000,
-        limit: 1,
+// --- Rate Limiting ---
+bot.use(limit({
+    timeFrame: 2000,
+    limit: 1,
+    onLimitExceeded: () => {/* logger.info('Rate limit (1msg/2s) exceeded.'); */},
+    keyGenerator: (ctx) => ctx.chat?.id.toString() ?? ctx.from?.id.toString(),
+}));
 
-        // This is called when the limit is exceeded.
-        onLimitExceeded: () => {
-            // logger.info('Skipping message because rate limit exceeded');
-        },
-
-        keyGenerator: (ctx) => {
-            if (ctx.hasChatType(['group', 'supergroup'])) {
-                return ctx.chat.id.toString();
-            }
-
-            return ctx.from?.id.toString();
-        },
+bot.use(limit({
+    timeFrame: 1 * 60 * 1000, // 1 minute
+    limit: 20,
+    onLimitExceeded: (ctx) => {
+        logger.warn(`Rate limit (20msg/min) exceeded for chat/user: ${ctx.chat?.id ?? ctx.from?.id}`);
+        return ctx.reply('You are sending messages too quickly. Please wait a moment.');
     },
-));
+    keyGenerator: (ctx) => ctx.chat?.id.toString() ?? ctx.from?.id.toString(),
+}));
 
-bot.use(limit(
-    {
-        // Allow only 20 message to be handled every 10 minutes.
-        timeFrame: 1 * 60 * 1000,
-        limit: 20,
-
-        // This is called when the limit is exceeded.
-        onLimitExceeded: (ctx) => {
-            logger.warn('Skipping message because rate limit exceeded');
-            return ctx.reply('Ratelimiting you');
-        },
-
-        keyGenerator: (ctx) => {
-            if (ctx.hasChatType(['group', 'supergroup'])) {
-                return ctx.chat.id.toString();
-            }
-
-            return ctx.from?.id.toString();
-        },
-    },
-));
-
-// Get response from AI
+// --- Main Message Handler (AI Interaction) ---
 bot.on('message', async (ctx) => {
+    const chatMemory = ctx.m.getChat();
     const messages: CoreMessage[] = [];
+    let systemPrompt = config.ai.prePrompt + '\n\n';
 
-    let prompt = config.ai.prePrompt + '\n\n';
     const savedHistory = ctx.m.getHistory();
-
-    // TODO: Improve this check
     const isComments = savedHistory.some((m) =>
         m.info.forward_origin?.type === 'channel' &&
         m.info.from?.first_name === 'Telegram'
     );
 
     if (ctx.chat.type === 'private') {
-        if (config.ai.privateChatPromptAddition) {
-            prompt += config.ai.privateChatPromptAddition;
-        }
+        if (config.ai.privateChatPromptAddition) systemPrompt += config.ai.privateChatPromptAddition;
     } else if (isComments && config.ai.commentsPromptAddition) {
-        prompt += config.ai.commentsPromptAddition;
+        systemPrompt += config.ai.commentsPromptAddition;
     } else if (config.ai.groupChatPromptAddition) {
-        prompt += config.ai.groupChatPromptAddition;
+        systemPrompt += config.ai.groupChatPromptAddition;
     }
 
-    if (ctx.m.getChat().hateMode && config.ai.hateModePrompt) {
-        prompt += '\n' + config.ai.hateModePrompt;
+    if (chatMemory.hateMode && config.ai.hateModePrompt) {
+        systemPrompt += '\n' + config.ai.hateModePrompt;
     }
+    systemPrompt += '\n\n';
 
-    prompt += '\n\n';
-
-    const character = ctx.m.getChat().character;
-    if (character) {
-        prompt += '### Character ###\n' + character.description;
+    const currentCharacter = chatMemory.character;
+    if (currentCharacter) {
+        systemPrompt += '### Character ###\n' + currentCharacter.description;
     } else {
-        prompt += config.ai.prompt;
+        systemPrompt += config.ai.prompt;
     }
+    messages.push({ role: 'system', content: systemPrompt });
 
-    messages.push({
-        role: 'system',
-        content: prompt,
-    });
-
-    let chatInfoMsg = `Date and time right now: ${prettyDate()}`;
-
-    if (ctx.chat.type === 'private') {
-        chatInfoMsg +=
-            `\nPrivate chat with ${ctx.from.first_name} (@${ctx.from.username})`;
-    } else {
+    let chatContextInfo = `Date and time right now: ${prettyDate()}`;
+    if (ctx.chat.type === 'private' && ctx.from) {
+        chatContextInfo += `\nPrivate chat with ${ctx.from.first_name} (@${ctx.from.username ?? 'N/A'})`;
+    } else if (ctx.chat.title) {
         const activeMembers = ctx.m.getActiveMembers();
         if (activeMembers.length > 0) {
-            const prettyMembersList = activeMembers.map((m) => {
-                let text = `- ${m.first_name}`;
-                if (m.username) {
-                    text += ` (@${m.username})`;
-                }
-                return text;
-            }).join('\n');
-
-            chatInfoMsg +=
-                `\nChat: ${ctx.chat.title}, Active members:\n${prettyMembersList}`;
+            const prettyMembersList = activeMembers.map((m) =>
+                `- ${m.first_name}${m.username ? ` (@${m.username})` : ''}`
+            ).join('\n');
+            chatContextInfo += `\nChat: ${ctx.chat.title}, Active members:\n${prettyMembersList}`;
+        } else {
+            chatContextInfo += `\nChat: ${ctx.chat.title}`;
         }
     }
 
-    // If we have notes, add them to messages
-    if (ctx.m.getChat().notes.length > 0) {
-        chatInfoMsg += `\n\nChat notes:\n${ctx.m.getChat().notes.join('\n')}`;
+    if (chatMemory.notes.length > 0) {
+        chatContextInfo += `\n\nChat notes (previous important points):\n${chatMemory.notes.join('\n')}`;
     }
-
-    if (ctx.m.getChat().memory) {
-        chatInfoMsg +=
-            `\n\nMY OWN PERSONAL NOTES AND MEMORY:\n${ctx.m.getChat().memory}`;
+    if (chatMemory.memory) {
+        chatContextInfo += `\n\nMY OWN PERSONAL NOTES AND MEMORY (confidential to me):\n${chatMemory.memory}`;
     }
+    messages.push({ role: 'assistant', content: chatContextInfo });
 
-    messages.push({
-        role: 'assistant',
-        content: chatInfoMsg,
-    });
-
-    const messagesToPass = ctx.m.getChat().messagesToPass ?? config.ai.messagesToPass;
-
-    let history = [];
+    const messagesToPassCount = chatMemory.messagesToPass ?? config.ai.messagesToPass;
+    let historyToPass: CoreMessage[] = [];
     try {
-        history = await makeHistoryV2(
+        historyToPass = await makeHistoryV2(
             { token: bot.token, id: bot.botInfo.id },
             bot.api,
-            logger,
+            logger, // Assuming logger is fine now
             savedHistory,
             {
-                messagesLimit: messagesToPass,
+                messagesLimit: messagesToPassCount,
                 bytesLimit: config.ai.bytesLimit,
                 symbolLimit: config.ai.messageMaxLength,
             },
         );
     } catch (error) {
-        logger.error('Could not get history: ', error);
-
-        if (!ctx.info.isRandom) {
-            await ctx.reply(getRandomNepon(config));
-        }
+        logger.error('Could not construct message history for AI:', error);
+        if (!ctx.info.isRandom) await ctx.reply(getRandomNepon(config));
         return;
     }
+    messages.push(...historyToPass);
 
-    messages.push(...history);
-
-    let finalPrompt = config.ai.finalPrompt;
+    let userFinalPrompt = config.ai.finalPrompt;
     if (ctx.info.userToReply) {
-        finalPrompt += ` Reply to the message from ${ctx.info.userToReply}.`;
+        userFinalPrompt += ` IMPORTANT: Your response should directly address or reply to the message from ${ctx.info.userToReply}.`;
     }
+    messages.push({ role: 'user', content: userFinalPrompt });
 
-    messages.push({
-        role: 'user',
-        content: finalPrompt,
-    });
+    const currentModel = chatMemory.chatModel ?? config.ai.model;
+    const requestTime = Date.now();
 
-    const model = ctx.m.getChat().chatModel ?? config.ai.model;
-
-    const time = new Date().getTime();
-
-    // TODO: Fix repeating replies
-    let result;
+    let aiResult;
     try {
-        result = await generateText({
-            model: google(model, { safetySettings }),
+        aiResult = await generateText({
+            model: google(currentModel, { safetySettings }),
             experimental_output: Output.object({
-                // @ts-expect-error TODO: Fix types
+                // @ts-expect-error schema definition might need adjustment based on actual AI SDK expectations
                 schema: z.array(z.object({
-                    text: z.string(),
+                    text: z.string().min(1, "AI response text cannot be empty"), // Ensure text is not empty
                     reply_to: z.string().optional(),
                 })),
             }),
@@ -454,189 +411,161 @@ bot.on('message', async (ctx) => {
             messages,
         });
     } catch (error) {
-        logger.error('Could not get response: ', error);
-
-        if (error instanceof APICallError) {
-            if (error.responseBody) {
-                let err;
-
-                try {
-                    err = JSON.parse(error.responseBody);
-                } catch (error) {
-                    logger.error('Could not parse error response: ', error);
-                }
-
-                if (err?.promptFeedback?.blockReason) {
+        logger.error('AI text generation failed:', error);
+        if (error instanceof APICallError && error.responseBody) {
+            try {
+                const errDetails = JSON.parse(error.responseBody);
+                if (errDetails?.promptFeedback?.blockReason) {
                     return ctx.reply(
-                        'API provider forbids you to respond. This may be due to the character: ' +
-                            err.promptFeedback.blockReason,
+                        `AI generation blocked. Reason: ${errDetails.promptFeedback.blockReason}. This might be due to safety settings or the prompt content.`,
                     );
                 }
+            } catch (parseError) {
+                logger.error('Could not parse AI error response body:', parseError);
             }
         }
-
-        if (!ctx.info.isRandom) {
-            await ctx.reply(getRandomNepon(config));
-        }
-
+        if (!ctx.info.isRandom) await ctx.reply(getRandomNepon(config));
         return;
     }
 
-    const output = result.experimental_output as {
-        text: string;
-        reply_to?: string;
-    }[];
+    // @ts-expect-error Assuming experimental_output matches the type, but good to verify
+    const aiOutputParts = aiResult.experimental_output as { text: string; reply_to?: string }[];
 
-    const name = ctx.chat.first_name ?? ctx.chat.title;
-    const username = ctx.chat?.username ? `(@${ctx.chat.username})` : '';
+    if (!aiOutputParts || aiOutputParts.length === 0 || aiOutputParts.every(p => p.text.trim() === "")) {
+        logger.warn('AI returned no usable text content.');
+        if (!ctx.info.isRandom) await ctx.reply("I'm a bit lost for words right now. Try again?");
+        return;
+    }
 
-    // console.log(
-    //     messages
-    //         .filter((_, i) => (i < 3) || i > messages.length - 3)
-    //         .map((m) => formatReply(m, character))
-    //         .join('\n\n'),
-    // );
+    const chatIdentifier = ctx.chat.first_name ?? ctx.chat.title ?? `ID ${ctx.chat.id}`;
+    const chatUsername = ctx.chat?.username ? `(@${ctx.chat.username})` : '';
     logger.info(
-        'Time to get response:',
-        (new Date().getTime() - time) / 1000,
-        `for "${name}" ${username}. Response:\n`,
-        formatReply(output, character),
+        `AI response time: ${(Date.now() - requestTime) / 1000}s for "${chatIdentifier}" ${chatUsername}. Response:\n`,
+        formatReply(aiOutputParts, currentCharacter), // Ensure formatReply can handle this structure
     );
 
-    let lastMsgId = null;
-    for (let i = 0; i < output.length; i++) {
-        const res = output[i];
-        let replyText = res.text.trim();
+    let lastMessageIdSentByBot: number | null = null;
+    for (let i = 0; i < aiOutputParts.length; i++) {
+        const part = aiOutputParts[i];
+        let replyText = part.text.trim();
+        if (!replyText) continue; // Skip empty parts
 
-        if (replyText.length === 0) {
-            logger.info(
-                `Empty response from AI`,
+        if (replyText.startsWith('* ')) replyText = '-' + replyText.slice(1); // Basic list formatting
+
+        let messageIdToReplyTo: number | undefined;
+        if (part.reply_to) {
+            const targetUserMessage = savedHistory.findLast((m) =>
+                m.info.from?.username && `@${m.info.from.username}` === part.reply_to
             );
-
-            return;
+            if (targetUserMessage) messageIdToReplyTo = targetUserMessage.id;
+        }
+        if (!messageIdToReplyTo && lastMessageIdSentByBot && i > 0) { // If replying to a multi-part bot message
+             messageIdToReplyTo = lastMessageIdSentByBot;
         }
 
-        // Replace lists with bullets
-        if (replyText.startsWith('* ')) {
-            replyText = replyText.slice(1);
-            replyText = '-' + replyText;
-        }
 
-        let msgToReply;
-        if (res.reply_to) {
-            // Find latest message with this username
-            msgToReply = savedHistory.findLast((m) =>
-                '@' + m.info.from?.username === res.reply_to
-            )?.id;
-        }
-
-        if (!msgToReply && lastMsgId) {
-            msgToReply = lastMsgId;
-        }
-
-        let replyInfo;
-
+        let sentMessageInfo;
         try {
             if (ctx.chat.type === 'private') {
-                replyInfo = await replyGeneric(
-                    ctx,
-                    replyText,
-                    false,
-                    'Markdown',
-                );
+                sentMessageInfo = await replyGeneric(ctx, replyText, false, 'Markdown');
             } else {
-                replyInfo = await replyWithMarkdownId(
-                    ctx,
-                    replyText,
-                    msgToReply,
-                );
+                sentMessageInfo = await replyWithMarkdownId(ctx, replyText, messageIdToReplyTo);
             }
-        } catch (error) {
-            logger.error('Could not reply to user: ', error);
-
-            if (!ctx.info.isRandom) {
-                await ctx.reply(getRandomNepon(config));
-            }
-
-            return;
+        } catch (replyError) {
+            logger.error('Failed to send reply to user:', replyError);
+            if (!ctx.info.isRandom && i === 0) await ctx.reply(getRandomNepon(config)); // Only send nepon if first part fails
+            continue; // Try sending next part if any
         }
 
-        lastMsgId = replyInfo.message_id;
-
-        let replyTo: ReplyTo | undefined;
-        if (replyInfo.reply_to_message) {
-            replyTo = {
-                id: replyInfo.reply_to_message.message_id,
-                text: replyInfo.reply_to_message.text ??
-                    replyInfo.reply_to_message.caption ?? '',
+        lastMessageIdSentByBot = sentMessageInfo.message_id;
+        let replyToContext: ReplyTo | undefined;
+        if (sentMessageInfo.reply_to_message) {
+            replyToContext = {
+                id: sentMessageInfo.reply_to_message.message_id,
+                text: sentMessageInfo.reply_to_message.text ?? sentMessageInfo.reply_to_message.caption ?? '',
                 isMyself: false,
-                info: replyInfo.reply_to_message,
+                info: sentMessageInfo.reply_to_message,
             };
         }
-
-        // Save bot's reply
         ctx.m.addMessage({
-            id: replyInfo.message_id,
+            id: sentMessageInfo.message_id,
             text: replyText,
             isMyself: true,
-            info: replyInfo,
-            replyTo,
+            info: sentMessageInfo,
+            replyTo: replyToContext,
         });
 
-        if (i === output.length - 1) {
-            break;
+        if (i < aiOutputParts.length - 1) { // If there are more parts
+            const nextPartText = aiOutputParts[i + 1]?.text ?? "";
+            if (nextPartText.trim()) { // Only wait if next part has content
+                const typingSpeedCharsPerMs = 1200 / (60 * 1000); // Chars per minute to chars per ms
+                let msToWait = nextPartText.length / typingSpeedCharsPerMs;
+                msToWait = Math.min(msToWait, 5000); // Max 5s wait
+                msToWait = Math.max(msToWait, 500);   // Min 0.5s wait if there's a next part
+                if (msToWait > 0) await new Promise((resolve) => setTimeout(resolve, msToWait));
+            }
         }
-
-        const typingSpeed = 1200; // symbol per minute
-        let msToWait = output[i + 1].text.length / typingSpeed * 60 * 1000;
-
-        if (msToWait > 5000) {
-            msToWait = 5000;
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, msToWait));
     }
 });
 
-run(bot);
-logger.info('Bot started');
+// --- Start Bot and Periodic Tasks ---
+try {
+    run(bot); // Starts the bot (long-polling or webhook via runner)
+    logger.info('Bot is now running and connected to Telegram.');
+} catch (error) {
+    logger.error('Failed to start Telegram bot runner:', error);
+    Deno.exit(1);
+}
 
-// TODO: Remind users about bot existence
+// Periodic task: Save memory
+// Ensure 'memory' object from 'await loadMemory()' has a 'save' method.
+if (memory && typeof memory.save === 'function') {
+    setInterval(async () => {
+        try {
+            await memory.save();
+            // logger.debug('Memory saved periodically.'); // Use debug for frequent successful ops
+        } catch (error) {
+            logger.error('Periodic memory save failed:', error);
+        }
+    }, 60 * 1000); // Every minute
+} else {
+    logger.warn("Memory object does not have a save method. Periodic save disabled.");
+}
 
-// Save memory every minute
-setInterval(async () => {
-    try {
-        await memory.save();
-    } catch (error) {
-        logger.error('Could not save memory: ', error);
-    }
-}, 60 * 1000);
-
-// Delete old files every hour
+// Periodic task: Delete old files
 setInterval(async () => {
     try {
         await deleteOldFiles(logger, config.filesMaxAge);
+        // logger.info('Old files cleanup task ran.');
     } catch (error) {
-        logger.error('Could not delete old files: ', error);
+        logger.error('Periodic old files deletion failed:', error);
     }
-}, 60 * 60 * 1000);
+}, 60 * 60 * 1000); // Every hour
 
-async function gracefulShutdown() {
+// --- Graceful Shutdown ---
+async function gracefulShutdown(signal: Deno.Signal) {
+    logger.info(`Received signal: ${signal}. Shutting down gracefully...`);
     try {
-        await memory.save();
-        logger.info('Memory saved on exit');
+        if (memory && typeof memory.save === 'function') {
+            await memory.save();
+            logger.info('Memory saved successfully on exit.');
+        }
     } catch (error) {
-        throw new Werror(error, 'Saving memory on exit');
+        // Use Werror or just log, but ensure it doesn't prevent bot.stop()
+        logger.error('Error saving memory during shutdown:', new Werror(error, 'Saving memory on exit'));
     } finally {
-        bot.stop();
-        Deno.exit();
+        if (bot) {
+            logger.info('Stopping Telegram bot...');
+            await bot.stop(); // grammY's stop method for the runner
+            logger.info('Telegram bot stopped.');
+        }
+        Deno.exit(0); // Exit with success code
     }
 }
 
-// Save memory on exit
-Deno.addSignalListener('SIGINT', gracefulShutdown); // Keep SIGINT, it works on Windows
-
-// Add SIGTERM listener only if NOT on Windows
-if (Deno.build.os !== "windows") {
-  Deno.addSignalListener('SIGTERM', gracefulShutdown);
+Deno.addSignalListener('SIGINT', () => gracefulShutdown('SIGINT'));
+if (Deno.build.os !== 'windows') {
+    Deno.addSignalListener('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
+
+logger.info("Application initialization sequence complete. Bot should be operational if 'Bot started' and 'Bot is now running' logs appear.");
