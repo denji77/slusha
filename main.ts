@@ -11,7 +11,7 @@ import { loadMemory, ReplyTo } from './lib/memory.ts';
 
 import { APICallError, CoreMessage, generateText, Output } from 'ai';
 import { google } from '@ai-sdk/google';
-// Deno.env.set("AI_TOKEN", "AIzaSyDbMM8pHtJ9IPP8yqkv0TdFbYgXmT5pzZg");
+
 import {
     createNameMatcher,
     deleteOldFiles,
@@ -75,7 +75,7 @@ bot.command('lobotomy', async (ctx) => {
 bot.command('changelog', async (ctx) => {
     await replyWithMarkdown(
         ctx,
-        '```js\n// TODO: write what\'s new```\n\nYou can check the commits - https://github.com/sleroq/slusha/commits/master',
+        '```js\n// TODO: write what\'s new```\n\nYou can check the commits - https://github.com/denji77/slusha/commits/alpha/',
     );
 });
 

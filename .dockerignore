@@ -1,0 +1,7 @@
+.git
+node_modules
+log
+tmp
+backups
+memory.json
+.env
