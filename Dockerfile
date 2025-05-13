@@ -1,10 +1,11 @@
+# filepath: c:\Users\xdenj\OneDrive\Desktop\VS Code\slusha\Dockerfile
 # Use the official Deno image
 FROM denoland/deno:alpine-1.35.0
 
 # Set the working directory
 WORKDIR /app
 
-# Copy necessary files
+# Copy necessary files, excluding those in .dockerignore
 COPY . .
 
 # Install dependencies without using the lock file
