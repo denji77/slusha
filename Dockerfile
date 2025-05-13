@@ -7,8 +7,11 @@ WORKDIR /app
 # Copy necessary files
 COPY . .
 
+# Copy and use the lock file
+COPY deno.lock deno.lock
+
 # Install dependencies
-RUN deno cache main.ts
+RUN deno cache main.ts --lock=deno.lock
 
 # Expose the port (if applicable)
 EXPOSE 8080
