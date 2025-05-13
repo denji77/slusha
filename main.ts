@@ -1,25 +1,27 @@
 // main.ts
 
-// Step 1: Ensure environment is ready (either from Vercel or local .env via lib/env.ts)
-import './lib/env.ts'; // This script should gracefully handle missing .env on Vercel
+// VERY FIRST LINES FOR TESTING
+console.log("MAIN.TS: Script execution started.");
+try {
+    // Note: On Vercel, this write will likely go to an ephemeral /tmp directory effectively.
+    // It helps confirm Deno has write permissions to *somewhere* allowed.
+    Deno.writeTextFileSync("./log/startup_test.txt", "Deno can write here at startup\n", { append: true });
+    console.log("MAIN.TS: Successfully wrote to startup_test.txt");
+} catch (e) {
+    console.error("MAIN.TS: FAILED to write to startup_test.txt:", e.message);
+}
+
+// Step 1: Environment setup (relies on Vercel or .env if lib/env.ts handles it)
+import './lib/env.ts';
+console.log("MAIN.TS: Imported lib/env.ts");
 
 // Step 2: Critical Environment Variable Checks
-// Define which environment variables are absolutely essential for the bot to run.
-const CRITICAL_ENV_VARS: string[] = [
-    'TELEGRAM_BOT_TOKEN',
-    'AI_TOKEN',
-    // Add any other absolutely essential variables here, e.g.,
-    // 'DATABASE_URL', if your memory persistence relies on it from the start.
-];
-
+const CRITICAL_ENV_VARS: string[] = ['TELEGRAM_BOT_TOKEN', 'AI_TOKEN'];
 let allCriticalVarsPresent = true;
 for (const varName of CRITICAL_ENV_VARS) {
     if (Deno.env.get(varName) === undefined) {
-        // Use console.error here, as the main logger might not be initialized yet,
-        // or its initialization might depend on these very environment variables.
         console.error(
-            `CRITICAL ERROR: Required environment variable "${varName}" is not set. ` +
-            `Please ensure it is configured in your Vercel project settings or local .env file.`,
+            `MAIN.TS CRITICAL: Required environment variable "${varName}" is not set. Please ensure it is configured in your Vercel project settings.`,
         );
         allCriticalVarsPresent = false;
     }
@@ -27,22 +29,57 @@ for (const varName of CRITICAL_ENV_VARS) {
 
 if (!allCriticalVarsPresent) {
     console.error(
-        'One or more critical environment variables are missing. Bot cannot start. Exiting.',
+        'MAIN.TS CRITICAL: One or more critical environment variables are missing. Bot cannot start. Exiting.',
     );
-    Deno.exit(1); // Exit immediately if critical configuration is absent.
+    Deno.exit(1);
+}
+console.log("MAIN.TS: Critical environment variable checks passed.");
+
+// Step 3: Import Werror
+import Werror from './lib/werror.ts';
+console.log("MAIN.TS: Imported lib/werror.ts");
+
+// Step 4: Setup Temporary Logger and Import/Check Custom Logger
+let tempStdLogger: any = null;
+try {
+    // Import ALL exports under the 'logStd' namespace
+    const logStd = await import('jsr:@deno-library/logger@^1.1.9');
+    await logStd.setup({ // Use logStd.setup
+        handlers: { console: new logStd.ConsoleHandler("DEBUG") }, // Use logStd.ConsoleHandler
+        loggers: { default: { level: "DEBUG", handlers: ["console"] } },
+    });
+    tempStdLogger = logStd.getLogger(); // Use logStd.getLogger
+    tempStdLogger.info("MAIN.TS: Temporary JSR logger setup successful.");
+} catch (e) {
+    console.error("MAIN.TS: FAILED to setup temporary JSR logger:", e.message, e.stack);
 }
 
-// Step 3: Import other modules now that critical environment variables are confirmed.
-import Werror from './lib/werror.ts';
-import logger from './lib/logger.ts'; // Assuming lib/logger.ts is correctly set up
+// Import YOUR custom logger (this should be its only import point in main.ts)
+import logger from './lib/logger.ts';
+console.log("MAIN.TS: Attempted to import custom logger from lib/logger.ts");
+
+// Check if the custom logger is valid
+if (typeof logger?.info !== 'function') {
+    console.error("MAIN.TS CRITICAL: Custom logger.info is not a function! Logger setup in lib/logger.ts likely failed or logger is undefined.");
+    tempStdLogger?.error("MAIN.TS CRITICAL: Custom logger.info is not a function after import!");
+    // Deno.exit(1); // Strongly consider exiting if the main application logger is broken
+} else {
+    // This is a crucial test for your custom logger
+    logger.info("MAIN.TS: Custom logger's own '.info()' method called successfully after import.");
+    tempStdLogger?.info("MAIN.TS: Custom logger 'info' method confirmed to exist and was called, according to temp logger.");
+}
+
+// Import config-related modules AFTER logger is confirmed (or attempted to be confirmed)
 import resolveConfig, { Config, safetySettings } from './lib/config.ts';
+console.log("MAIN.TS: Imported resolveConfig and related types from lib/config.ts");
+
+
+// Step 5: Import REMAINING application modules
 import setupBot from './lib/telegram/setup-bot.ts';
 import { run } from 'npm:@grammyjs/runner';
 import { loadMemory, ReplyTo } from './lib/memory.ts';
-
 import { APICallError, CoreMessage, generateText, Output } from 'npm:ai';
 import { google } from 'npm:@ai-sdk/google';
-
 import {
     createNameMatcher,
     deleteOldFiles,
@@ -68,12 +105,14 @@ import notes from './lib/telegram/bot/notes.ts';
 import { makeHistoryV2 } from './lib/history.ts';
 import z from 'npm:zod';
 import contextCommand from './lib/telegram/bot/context.ts';
+console.log("MAIN.TS: All remaining modules imported.");
+
 
 // --- Application Initialization ---
 
 let config: Config;
 try {
-    logger.info('Resolving application configuration...');
+    logger.info('Resolving application configuration...'); // Uses your custom logger
     config = await resolveConfig();
     logger.info('Configuration resolved successfully.');
 } catch (error) {
@@ -81,14 +120,12 @@ try {
     Deno.exit(1);
 }
 
-let memory; // Declare memory here so it's in scope for intervals if loadMemory is async
+let memory;
 try {
     logger.info('Loading memory...');
-    memory = await loadMemory(); // Assuming loadMemory returns the memory instance
+    memory = await loadMemory();
     logger.info('Memory loaded successfully.');
 } catch (error) {
-    // The original error was "logger.warn is not a function" here.
-    // This assumes logger IS correctly set up now. If not, this line itself might fail.
     logger.error('Failed to load memory:', error);
     Deno.exit(1);
 }
@@ -104,7 +141,8 @@ try {
 }
 
 // --- Bot Command Handlers and Middleware ---
-
+// (Your existing bot logic from 'bot.command('start', ...)' onwards)
+// ... (omitted for brevity, it's the same as your last provided version) ...
 bot.command('start', (ctx) => ctx.reply(config.startMessage));
 
 bot.command('forget', async (ctx) => {
