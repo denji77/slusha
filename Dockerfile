@@ -29,4 +29,4 @@ ENV DENO_ENV=production
 
 # Run the application
 # Permissions: --allow-write=./tmp,./log grants write access to these specific dirs.
-CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write=./tmp,./log", "main.ts"]
+CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "main.ts"]
