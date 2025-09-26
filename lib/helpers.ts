@@ -1,32 +1,13 @@
-// lib/helpers.ts
-
-// lib/helpers.ts
-// lib/helpers.ts
 import { Config } from './config.ts';
-import ky from 'npm:ky';
-import { Api, RawApi, Message, PhotoSize, Sticker } from 'npm:grammy'; // Combined grammy imports
-import { Logger } from 'jsr:@deno-library/logger@^1.1.9'; // Or specific version
-import { ImagePart, supportedTypesMap } from './history.ts';
-import { exists } from '@std/fs/exists';
-// REMOVED: import { Message, PhotoSize, Sticker } from 'npm:grammy-types';
-import { FileState, GoogleAIFileManager } from 'npm:@google/generative-ai/server';
-import { CoreMessage } from 'npm:ai'; // Ensure 'ai' is the correct package (e.g., Vercel AI SDK)
+import ky from 'ky';
+import { Api, RawApi } from 'grammy';
+import { Logger } from '@deno-library/logger';
+import { supportedTypesMap } from './history.ts';
+import { exists } from '@std/fs';
+import { Message, PhotoSize, Sticker } from 'grammy_types';
+import { GoogleGenAI } from '@google/genai';
+import { ImagePart, ModelMessage } from 'ai';
 import { BotCharacter } from './memory.ts';
-// import { encodeBase64 } from "@std/encoding/base64";
-
-// ... rest of your helpers.ts code
-// import { encodeBase64 } from "@std/encoding/base64"; // If using, use @std/
-
-// ... rest of your helpers.ts code
-// If you were using base64:
-// import { encodeBase64 } from "@std/encoding/base64";
-// import { encodeBase64 } from "https://deno.land/std@0.220.0/encoding/base64.ts";
-
-// ... rest of your code
-// If you were using this, it would also need a full URL:
-// import { encodeBase64 } from "https://deno.land/std@0.220.0/encoding/base64.ts";
-
-// ... rest of your code
 // import { encodeBase64 } from "@std/encoding/base64";
 
 export function getRandomInt(min: number, max: number) {
@@ -94,32 +75,41 @@ export function splitMessage(message: string, maxLength = 3000) {
     return parts;
 }
 
-const AI_TOKEN = Deno.env.get('AI_TOKEN');
+let ai: GoogleGenAI | null = null;
 
-if (!AI_TOKEN) {
-    throw new Error('AI_TOKEN is required');
+function getAI(): GoogleGenAI {
+    if (!ai) {
+        const AI_TOKEN = (globalThis as any).Deno.env.get('AI_TOKEN');
+        if (!AI_TOKEN) {
+            throw new Error('AI_TOKEN is required');
+        }
+        ai = new GoogleGenAI({ apiKey: AI_TOKEN });
+    }
+    return ai;
 }
 
-const fileManager = new GoogleAIFileManager(AI_TOKEN);
+async function uploadToGoogle(path: string, _name: string, mimeType: string) {
+    const fileData = await (globalThis as any).Deno.readFile(path);
+    const blob = new Blob([fileData], { type: mimeType });
 
-async function uploadToGoogle(path: string, name: string, mimeType: string) {
-    const uploadResult = await fileManager.uploadFile(path, {
-        mimeType,
-        displayName: name,
+    const aiInstance = getAI();
+    const uploadResult = await aiInstance.files.upload({
+        file: blob,
     });
 
-    let file = await fileManager.getFile(uploadResult.file.name);
-    while (file.state === FileState.PROCESSING) {
-        // deno-lint-ignore no-explicit-any
-        await new Promise((resolve: any) => setTimeout(resolve, 1000)); // Increased timeout slightly
-        file = await fileManager.getFile(uploadResult.file.name);
+    let file = uploadResult;
+    while (file.state === 'PROCESSING') {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (uploadResult.name) {
+            file = await aiInstance.files.get({ name: uploadResult.name });
+        }
     }
 
-    if (file.state === FileState.FAILED) {
-        throw new Error('Google AI File processing failed.');
+    if (file.state === 'FAILED') {
+        throw new Error('Audio processing failed.');
     }
 
-    return file.uri;
+    return file.uri || '';
 }
 
 export async function downloadFile(
@@ -129,15 +119,6 @@ export async function downloadFile(
     mimeType: string,
 ) {
     const filePath = `./tmp/${fileId}`;
-    // Ensure tmp directory exists
-    try {
-        await Deno.mkdir("./tmp", { recursive: true });
-    } catch (e) {
-        if (!(e instanceof Deno.errors.AlreadyExists)) {
-            throw e;
-        }
-    }
-
     if (await exists(filePath)) {
         // return encodeBase64(await Deno.readFile(filePath))
         return uploadToGoogle(filePath, fileId, mimeType);
@@ -145,18 +126,13 @@ export async function downloadFile(
 
     const file = await api.getFile(fileId);
 
-    if (!file.file_path) {
-        throw new Error(`File path not found for file ID: ${fileId}`);
-    }
-
     const downloadUrl =
         `https://api.telegram.org/file/bot${token}/${file.file_path}`;
 
-    const response = await ky.get(downloadUrl);
-    const arrayBuffer = await response.arrayBuffer();
+    const arrayBuffer = await ky.get(downloadUrl).arrayBuffer();
     const buffer = new Uint8Array(arrayBuffer);
 
-    await Deno.writeFile(filePath, buffer);
+    await (globalThis as any).Deno.writeFile(filePath, buffer);
 
     // return encodeBase64(buffer);
     return uploadToGoogle(filePath, fileId, mimeType);
@@ -166,30 +142,32 @@ export async function getImageContent(
     api: Api<RawApi>,
     token: string,
     fileId: string,
-    mimeType: string,
+    mediaType: string,
 ): Promise<ImagePart> {
-    const fileUri = await downloadFile(api, token, fileId, mimeType);
+    const file = await downloadFile(api, token, fileId, mediaType);
 
     return {
         type: 'image',
-        image: fileUri, // This should be the URI from Google, not the file path
-        mimeType,
+        image: file,
+        mediaType,
     };
 }
 
 export function chooseSize(photos: PhotoSize[]): PhotoSize {
-    // Filter out photos without file_size before sorting
-    const sizedPhotos = photos.filter(p => p.file_size !== undefined && p.file_size !== null);
+    return photos.sort((a, b) => {
+        if (!a.file_size || !b.file_size) {
+            return 0;
+        }
 
-    if (sizedPhotos.length === 0) {
-        // Fallback if no photos have file_size, return the first one or handle error
-        if (photos.length > 0) return photos[0];
-        throw new Error("No photos provided or none have file_size");
-    }
+        if (a.file_size > b.file_size) {
+            return -1;
+        }
 
-    return sizedPhotos.sort((a, b) => {
-        // At this point, a.file_size and b.file_size are guaranteed to be numbers
-        return (b.file_size as number) - (a.file_size as number);
+        if (a.file_size < b.file_size) {
+            return 1;
+        }
+
+        return 0;
     })[0];
 }
 
@@ -199,55 +177,34 @@ export function chooseSize(photos: PhotoSize[]): PhotoSize {
  * @param maxAge Max age in hours
  */
 export async function deleteOldFiles(logger: Logger, maxAge: number) {
-    const tmpDir = './tmp';
-    // Ensure tmp directory exists before trying to read it
-    try {
-        await Deno.stat(tmpDir);
-    } catch (error) {
-        if (error instanceof Deno.errors.NotFound) {
-            logger.info(`Directory ${tmpDir} does not exist, nothing to delete.`);
-            return;
-        }
-        throw error; // Re-throw other errors
-    }
-
-    const files = Deno.readDir(tmpDir);
+    const files = (globalThis as any).Deno.readDir('./tmp');
 
     let deletedCount = 0;
     for await (const file of files) {
-        if (file.isDirectory) continue; // Skip directories
+        const filePath = `./tmp/${file.name}`;
 
-        const filePath = `${tmpDir}/${file.name}`;
+        const stat = await (globalThis as any).Deno.stat(filePath);
 
-        try {
-            const stat = await Deno.stat(filePath);
-            const mtime = stat.mtime?.getTime() ?? 0;
-            const age = (Date.now() - mtime) / (1000 * 60 * 60);
+        const mtime = stat.mtime?.getTime() ?? 0;
+        const age = (Date.now() - mtime) / (1000 * 60 * 60);
 
-            if (age > maxAge || stat.mtime === null) {
-                await Deno.remove(filePath);
-                deletedCount++;
+        if (age > maxAge || stat.mtime === null) {
+            try {
+                await (globalThis as any).Deno.remove(filePath);
+            } catch (error) {
+                logger.warn(`Failed to delete file: ${filePath}`, error);
             }
-        } catch (error) {
-             // Log if stat or remove fails, but continue
-            logger.warn(`Failed to process or delete file: ${filePath}`, error);
+
+            deletedCount++;
         }
     }
 
-    if (deletedCount > 0) {
-        logger.info(`Deleted ${deletedCount} old files from ${tmpDir}`);
-    } else {
-        logger.info(`No old files to delete from ${tmpDir}`);
-    }
+    logger.info(`Deleted ${deletedCount} files`);
 }
 
 export function getRandomNepon(config: Config) {
     const nepons = config.nepons;
-    if (!nepons || nepons.length === 0) {
-        // Handle case where nepons might be undefined or empty
-        throw new Error("Nepons configuration is empty or missing.");
-    }
-    const randomIndex = getRandomInt(0, nepons.length); // max is exclusive, so nepons.length is fine
+    const randomIndex = getRandomInt(0, nepons.length - 1);
     return nepons[randomIndex];
 }
 
@@ -266,22 +223,21 @@ export function probability(percentage: number) {
 }
 
 export function testMessage(regexs: Array<string | RegExp>, text: string) {
-    if (!text) return false; // Handle undefined or null text
     return regexs.some((regex) => {
         if (typeof regex === 'string') {
             return text.includes(regex);
         }
+
         return regex.test(text);
     });
 }
 
 export function msgTypeSupported(msg: Message) {
     for (const [type] of supportedTypesMap) {
-        if (type in msg && msg[type as keyof Message] !== undefined) {
+        if (msg[type] !== undefined) {
             return true;
         }
     }
-    return false;
 }
 
 /**
@@ -314,16 +270,16 @@ export function removeFieldsWithSuffixes<T>(
     // deno-lint-ignore no-explicit-any
     const result: Record<string, any> = {};
 
-    for (const key in obj) {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
-            // Skip keys ending with any of the specified suffixes
-            if (suffixes.some((suffix) => key.endsWith(suffix))) {
-                continue;
-            }
-            // Recursively process nested objects
-            result[key] = removeFieldsWithSuffixes(obj[key], suffixes);
+    for (const [key, value] of Object.entries(obj)) {
+        // Skip keys ending with any of the specified suffixes
+        if (suffixes.some((suffix) => key.endsWith(suffix))) {
+            continue;
         }
+
+        // Recursively process nested objects
+        result[key] = removeFieldsWithSuffixes(value, suffixes);
     }
+
     return result;
 }
 
@@ -341,89 +297,103 @@ export function prettyDate() {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-        timeZone: 'Europe/Moscow', // Consider making timezone configurable
+        timeZone: 'Europe/Moscow',
     };
 
     const now = new Date();
-    // Use 'ru' for Russian locale for consistency with timezone if desired
     const formattedDate = now.toLocaleDateString('ru-RU', options);
     return formattedDate;
 }
 
 // Create a more robust name matching function
-export function createNameMatcher(names: string[]) {
-    // Process each name to handle special characters and create proper boundaries
-    const patterns = names.map((name) => {
-        if (name.trim() === '') return ''; // Avoid empty patterns
-        const escapedName = escapeRegExp(name);
-        // Match names that are surrounded by non-word characters or at start/end of text
-        // Using \b might be too restrictive if names can be part of other words or have special chars.
-        // This pattern is more explicit about boundaries.
-        return `(?:^|[^a-zA-Z0-9а-яА-ЯЁё])${escapedName}(?:[^a-zA-Z0-9а-яА-ЯЁё]|$)`;
-    }).filter(pattern => pattern !== ''); // Filter out empty patterns
+export function createNameMatcher(names: Array<string | RegExp>) {
+    // Process each name or pattern, handling strings and regular expressions
+    const patterns = names.map((nameOrPattern) => {
+        if (typeof nameOrPattern === 'string') {
+            const escapedName = escapeRegExp(nameOrPattern);
+            // Match names that are surrounded by spaces, punctuation, or at start/end of text
+            return `(?:^|[\\s.,!?;:'"\\[\\](){}])${escapedName}(?:[\\s.,!?;:'"\\[\\](){}]|$)`;
+        }
 
-    if (patterns.length === 0) {
-        // Return a regex that never matches if no valid names are provided
-        return new RegExp('$^'); // Matches nothing
-    }
+        // Use the provided RegExp's source directly
+        return nameOrPattern.source;
+    });
 
     return new RegExp(patterns.join('|'), 'gmi');
 }
 
 export function formatReply(
-    m: CoreMessage | { text: string; reply_to?: string }[],
+    m:
+        | ModelMessage
+        | ({ text: string; reply_to?: string; offset?: number } | {
+            react: string;
+            reply_to?: string;
+            offset?: number;
+        })[],
     char?: BotCharacter,
 ) {
     const charName = char?.name ?? 'Slusha';
     let text = '';
 
     let content;
-    let role: string | undefined;
-
-    if (!Array.isArray(m) && 'role' in m) {
-        role = m.role;
+    if (!Array.isArray(m)) {
         content = m.content;
     } else {
-        // This case handles the { text: string; reply_to?: string }[] array
-        // or a CoreMessage without a role (though CoreMessage should have a role)
         content = m;
     }
 
-    if (role === 'assistant' || Array.isArray(content)) { // Assuming array content implies assistant output
+    if (!('content' in m) || m.role === 'assistant') {
         text += `${charName}:`;
-    }
 
-    if (typeof content === 'string') {
-        text += ('\n    ' + content.trim().replace(/\n/g, '\n    '));
-    } else if (Array.isArray(content)) {
-        text += content.map((c) => {
-            let res = '';
-            // Check if 'c' is a part of CoreMessage content (e.g., TextPart, ImagePart)
-            // or the custom { text: string; reply_to?: string } structure
-            if ('text' in c && typeof c.text === 'string') { // Handles { text: string; ... }
-                res = (role === 'assistant' ? '\n' : '') + `    ${c.text}`;
-            } else if ('type' in c) { // Handles parts of CoreMessage.content if it's an array
-                switch (c.type) {
-                    case 'text':
-                        res = (role === 'assistant' ? '\n' : '') + c.text;
-                        break;
-                    case 'image': // Assuming ImagePart has 'image' and 'mimeType'
-                        res = `    image: ${'image' in c ? c.image : '[Missing image data]'} (${'mimeType' in c ? c.mimeType : '[Missing mimeType]'})`;
-                        break;
-                    case 'file': // Assuming FilePart has 'data' and 'mimeType'
-                        res = `    file: ${'data' in c ? c.data : '[Missing file data]'} (${'mimeType' in c ? c.mimeType : '[Missing mimeType]'})`;
-                        break;
-                    default:
-                        // Potentially stringify unknown parts if necessary
-                        res = `    [Unsupported content part: ${JSON.stringify(c)}]`;
+        if (Array.isArray(content)) {
+            content = content.map((c) => {
+                if ('text' in c) {
+                    return {
+                        ...c,
+                        text: '\n' + c.text,
+                    };
+                } else {
+                    return c;
                 }
-            } else {
-                 res = `    [Unknown content structure: ${JSON.stringify(c)}]`;
-            }
-            return res.replace(/\n/g, '\n    ');
-        }).join(''); // Removed join('\n') as each part already prepends spaces/newlines
+            });
+        }
     }
 
+    if (!Array.isArray(content)) {
+        return '\n    ' + content.trim().replace(/\n/g, '\n    ');
+    }
+
+    text += content.map((c) => {
+        let res = '';
+
+        if (!('type' in c)) {
+            if ('text' in c) {
+                res = `    ${c.text}`;
+            } else if ('react' in c) {
+                res = `    [react ${c.react}${
+                    c.reply_to ? ' -> ' + c.reply_to : ''
+                }${typeof c.offset === 'number' ? ' #' + c.offset : ''}]`;
+            } else {
+                res = '';
+            }
+        } else {
+            switch (c.type) {
+                case 'text':
+                    res = c.text;
+                    break;
+                case 'image':
+                    res = `    image: ${c.image}`;
+                    break;
+                case 'file':
+                    res = `    file: ${c.data}`;
+                    break;
+                default:
+                    res = '';
+            }
+        }
+
+        return res.replace(/\n/g, '\n    ');
+    }).join('\n');
 
     return text;
 }

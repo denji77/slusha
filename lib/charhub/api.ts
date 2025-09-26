@@ -1,6 +1,6 @@
 import ky from 'ky';
 
-export interface CharacterResult {
+interface CharacterResult {
     id: number;
     name: string;
     fullPath: string;
@@ -22,11 +22,10 @@ export interface CharacterResult {
     related_lorebooks: number[];
     related_prompts: number[];
     related_extensions: number[];
-    forks: number[];
     hasGallery: boolean;
     nChats: number;
     nMessages: number;
-    definition: string;
+    definition: number;
     permissions: string;
     is_public: boolean;
     is_favorite: boolean;
@@ -35,11 +34,15 @@ export interface CharacterResult {
     n_favorites: number;
     is_unlisted: boolean;
     avatar_url: string;
-    bound_preset: string;
-    project_uuid: string;
+    max_res_url: string;
+    bound_preset: number;
+    project_uuid: number;
+    voice_id: number;
     verified: boolean;
     recommended: boolean;
     ratings_disabled: boolean;
+    lang_id: number;
+    badges: unknown[];
 }
 
 interface Label {
@@ -48,28 +51,38 @@ interface Label {
 }
 
 export interface SearchResult {
-    nodes: CharacterResult[];
+    data: {
+        count: number;
+        nodes: CharacterResult[];
+    };
 }
 
 export const pageSize = 20;
 
 export async function getCharacters(query = '', page = 1, excludeNsfw = true) {
-    const url = new URL('https://api.chub.ai/api/characters/search');
+    const url = new URL('https://gateway.chub.ai/search');
+
     if (excludeNsfw) {
         url.searchParams.set('excludetopics', 'nsfw');
+    } else {
+        // If not excluding NSFW, the original request had an empty string
+        url.searchParams.set('excludetopics', '');
     }
+
     url.searchParams.set('first', String(pageSize));
     url.searchParams.set('page', String(page));
     url.searchParams.set('namespace', 'characters');
     url.searchParams.set('search', query);
     url.searchParams.set('include_forks', 'true');
-    url.searchParams.set('nsfw', 'true');
+    url.searchParams.set('nsfw', 'false');
     url.searchParams.set('nsfw_only', 'false');
     url.searchParams.set('require_custom_prompt', 'false');
+    url.searchParams.set('require_example_dialogues', 'false');
     url.searchParams.set('require_images', 'false');
     url.searchParams.set('require_expressions', 'false');
-    url.searchParams.set('nsfl', 'true');
+    url.searchParams.set('nsfl', 'false');
     url.searchParams.set('asc', 'false');
+    url.searchParams.set('min_ai_rating', '0');
     url.searchParams.set('min_tokens', '50');
     url.searchParams.set('max_tokens', '100000');
     url.searchParams.set('chub', 'true');
@@ -77,9 +90,13 @@ export async function getCharacters(query = '', page = 1, excludeNsfw = true) {
     url.searchParams.set('exclude_mine', 'true');
     url.searchParams.set('require_lore_embedded', 'false');
     url.searchParams.set('require_lore_linked', 'false');
-    url.searchParams.set('sort', 'star_count');
+    url.searchParams.set('language', '');
+    url.searchParams.set('sort', 'default');
+    url.searchParams.set('min_tags', '2');
     url.searchParams.set('topics', '');
-    url.searchParams.set('venus', 'true');
+    url.searchParams.set('inclusive_or', 'false');
+    url.searchParams.set('recommended_verified', 'false');
+    url.searchParams.set('require_alternate_greetings', 'false');
     url.searchParams.set('count', 'false');
 
     const results = await ky.get(url, {
@@ -90,7 +107,7 @@ export async function getCharacters(query = '', page = 1, excludeNsfw = true) {
         },
     }).json<SearchResult>();
 
-    return results.nodes;
+    return results.data.nodes;
 }
 
 interface Extensions {
@@ -133,7 +150,6 @@ export async function getCharacter(id: number) {
     );
 
     const response = await ky.get(url, {
-        credentials: 'omit',
         headers: {
             'User-Agent':
                 'Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0',
@@ -144,9 +160,6 @@ export async function getCharacter(id: number) {
             'Sec-Fetch-Site': 'same-site',
             'Priority': 'u=0',
         },
-        referrer: 'https://venus.chub.ai/',
-        method: 'GET',
-        mode: 'cors',
     }).json<DownloadResponse>();
 
     return { ...response.data, id };

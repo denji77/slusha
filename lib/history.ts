@@ -1,5 +1,5 @@
 import { Api, RawApi } from 'grammy';
-import { CoreMessage } from 'npm:ai';
+import { ModelMessage, UserContent } from 'npm:ai';
 import {
     chooseSize,
     downloadFile,
@@ -9,29 +9,8 @@ import {
 } from './helpers.ts';
 import { ChatMessage, ReplyTo } from './memory.ts';
 import { Message } from 'grammy_types';
-import { Logger } from 'jsr:@deno-library/logger';
+import { Logger } from '@deno-library/logger';
 import logger from './logger.ts';
-
-export interface FileContent {
-    type: 'file';
-    mimeType: string;
-    data: Uint8Array | ArrayBuffer | string;
-}
-
-export interface TextPart {
-    type: 'text';
-    text: string;
-}
-
-export interface ImagePart {
-    type: 'image';
-    image: Uint8Array | ArrayBuffer | URL | string;
-    mimeType?: string;
-}
-
-type ContentPart = TextPart | ImagePart | FileContent;
-
-type MessageContent = ContentPart[];
 
 interface HistoryOptions {
     symbolLimit: number;
@@ -39,6 +18,7 @@ interface HistoryOptions {
     bytesLimit: number;
     attachments?: boolean;
     resolveReplyThread?: boolean;
+    includeReactions?: boolean;
 }
 
 function resolveReplyThread(
@@ -73,11 +53,11 @@ function resolveReplyThread(
 type PrintType = (name: keyof Message, msg: Message) => string;
 
 function getAttachmentDefault(name: keyof Message) {
-    return `"${name}": true`;
+    return `"${String(name)}": true`;
 }
 
 function getStickerAttachment(name: keyof Message, msg: Message) {
-    return `"${name}": { "emoji": "${msg.sticker?.emoji}" }`;
+    return `"${String(name)}": { "emoji": "${msg.sticker?.emoji}" }`;
 }
 
 export const supportedTypesMap = new Map<keyof Message, PrintType>([
@@ -152,6 +132,7 @@ interface ConstructMsgOptions {
     symbolLimit: number;
     attachments: boolean;
     characterName?: string;
+    includeReactions?: boolean;
 }
 
 function getTimeString(date: Date): string {
@@ -166,9 +147,10 @@ async function constructMsg(
     botInfo: { token: string; id: number },
     msg: ChatMessage,
     options: ConstructMsgOptions,
-): Promise<CoreMessage> {
+): Promise<ModelMessage> {
     const { symbolLimit, characterName } = options;
     const attachAttachments = options.attachments;
+    const includeReactions = options.includeReactions ?? false;
 
     const role = msg.isMyself ? 'assistant' : 'user';
     const firstName = msg.info.from?.first_name ?? 'User';
@@ -192,7 +174,9 @@ async function constructMsg(
                 const prettyJsonObject = removeFieldsWithSuffixes(
                     msg.info[type],
                 );
-                text += `\n"${type}": ${JSON.stringify(prettyJsonObject)}`;
+                text += `\n"${String(type)}": ${
+                    JSON.stringify(prettyJsonObject)
+                }`;
             }
         }
     }
@@ -201,7 +185,7 @@ async function constructMsg(
         throw new Error('Message is not supported');
     }
 
-    const parts: MessageContent = [];
+    const parts: UserContent = [];
 
     let username = msg.info.from?.username;
     if (username) {
@@ -285,13 +269,39 @@ async function constructMsg(
 
     prettyInputMessage += `${text.trim()}`;
 
+    if (
+        includeReactions && msg.reactions &&
+        Object.keys(msg.reactions).length > 0
+    ) {
+        const parts: string[] = [];
+        for (const rec of Object.values(msg.reactions)) {
+            let label = '';
+            if (rec.type === 'emoji' && rec.emoji) label = rec.emoji;
+            else if (rec.type === 'custom' && rec.customEmojiId) {
+                label = `custom:${rec.customEmojiId}`;
+            } else continue;
+
+            if (rec.by && rec.by.length > 0) {
+                const users = rec.by.map((u) =>
+                    u.username ? `@${u.username}` : u.name
+                ).join(', ');
+                parts.push(`${label} by ${users}`);
+            } else if (rec.count && rec.count > 0) {
+                parts.push(`${label} x${rec.count}`);
+            }
+        }
+        if (parts.length > 0) {
+            prettyInputMessage += ` <reactions: ${parts.join(', ')}>`;
+        }
+    }
+
     parts.push({
         type: 'text',
         text: prettyInputMessage,
     });
 
     if (attachAttachments && role === 'user') {
-        let attachments: MessageContent = [];
+        let attachments: Exclude<UserContent, string> = [];
         try {
             attachments = await getAttachments(api, botInfo.token, msg);
         } catch (error) {
@@ -310,7 +320,7 @@ async function constructMsg(
     return {
         role,
         content: parts,
-    } as CoreMessage;
+    } as ModelMessage;
 }
 
 export async function makeHistoryV2(
@@ -319,13 +329,13 @@ export async function makeHistoryV2(
     logger: Logger,
     history: ChatMessage[],
     options: HistoryOptions,
-): Promise<CoreMessage[]> {
+): Promise<ModelMessage[]> {
     const { messagesLimit, bytesLimit, symbolLimit } = options;
     const resolveReplies = options.resolveReplyThread ?? true;
 
     let totalBytes = 0;
     let totalAttachments = 0;
-    const prompt: CoreMessage[] = [];
+    const prompt: ModelMessage[] = [];
     const addedMessages: number[] = [];
 
     // Go through history in reverse order
@@ -358,6 +368,7 @@ export async function makeHistoryV2(
                     {
                         symbolLimit,
                         attachments: attachAttachments,
+                        includeReactions: options.includeReactions,
                     },
                 );
             } catch (error) {
@@ -379,11 +390,11 @@ export async function makeHistoryV2(
             const size = JSON.stringify(msgRes).length;
 
             if (totalBytes + size >= bytesLimit) {
-                logger.info(
-                    `Skipping old messages because prompt is too big ${size} (${
-                        totalBytes + size
-                    } > ${bytesLimit})`,
-                );
+                // logger.info(
+                //     `Skipping old messages because prompt is too big ${size} (${
+                //         totalBytes + size
+                //     } > ${bytesLimit})`,
+                // );
                 break;
             }
 
@@ -419,7 +430,7 @@ export async function makeNotesHistory(
     logger: Logger,
     history: ChatMessage[],
     options: NotesHistoryOptions,
-): Promise<CoreMessage[]> {
+): Promise<ModelMessage[]> {
     const { messagesLimit, bytesLimit, symbolLimit, characterName } = options;
 
     let totalBytes = 0;
@@ -491,8 +502,8 @@ async function getAttachments(
     api: Api<RawApi>,
     token: string,
     msg: ChatMessage | ReplyTo,
-): Promise<MessageContent> {
-    const parts: MessageContent = [];
+): Promise<Exclude<UserContent, string>> {
+    const parts: UserContent = [];
 
     if (msg.info.photo) {
         const size = chooseSize(msg.info.photo);
@@ -522,7 +533,7 @@ async function getAttachments(
             parts.push({
                 type: 'file',
                 data: file,
-                mimeType: 'video/webm',
+                mediaType: 'video/webm',
             });
 
             return parts;
@@ -573,7 +584,7 @@ async function getAttachments(
             parts.push({
                 type: 'file',
                 data: file,
-                mimeType: mimeType,
+                mediaType: mimeType,
             });
         } else {
             const thumbnailId = msg.info.video.thumbnail?.file_id;
@@ -609,18 +620,18 @@ async function getAttachments(
             return parts;
         }
 
-        const mimeType = animation.mime_type;
+        const mediaType = animation.mime_type;
         const file = await downloadFile(
             api,
             token,
             animation.file_id,
-            mimeType,
+            mediaType,
         );
 
         parts.push({
             type: 'file',
             data: file,
-            mimeType,
+            mediaType,
         });
     }
 
@@ -637,7 +648,7 @@ async function getAttachments(
         parts.push({
             type: 'file',
             data: file,
-            mimeType: 'video/mp4',
+            mediaType: 'video/mp4',
         });
     }
 
@@ -649,13 +660,13 @@ async function getAttachments(
             return parts;
         }
 
-        const mimeType = voice.mime_type;
-        const file = await downloadFile(api, token, voice.file_id, mimeType);
+        const mediaType = voice.mime_type;
+        const file = await downloadFile(api, token, voice.file_id, mediaType);
 
         parts.push({
             type: 'file',
             data: file,
-            mimeType,
+            mediaType,
         });
     }
 

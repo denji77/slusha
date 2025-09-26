@@ -4,4 +4,6 @@
 /out/
 /tmp/
 /backups/
+/node_modules/
 .env
+/lib/.env

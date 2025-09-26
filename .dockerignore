@@ -1,8 +1,6 @@
-.git
-node_modules
-log
-tmp
-backups
-memory.json
-.env
-deno.lock
+*
+!/main.ts
+!/deno.json
+!/deno.lock
+!/lib/
+!/locales/

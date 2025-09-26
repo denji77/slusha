@@ -1,15 +1,23 @@
-// In lib/env.ts
-const requiredVars = ['TELEGRAM_BOT_TOKEN', 'AI_TOKEN', /* other CRITICAL vars */];
-let allVarsPresent = true;
-for (const varName of requiredVars) {
-    if (Deno.env.get(varName) === undefined) {
-        console.error(
-            `CRITICAL: Required environment variable "${varName}" is not set. Please set it in your Vercel project settings.`,
-        );
-        allVarsPresent = false;
+import { load } from "https://deno.land/std@0.224.0/dotenv/mod.ts";
+
+export async function loadEnv() {
+    try {
+        const env = await load({
+            envPath: "./.env",
+            export: true,
+        });
+
+        // Verify required environment variables
+        const required = ["AI_TOKEN", "TELEGRAM_BOT_TOKEN"];
+        const missing = required.filter(key => !(globalThis as any).Deno.env.get(key));
+
+        if (missing.length > 0) {
+            throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+        }
+
+        return env;
+    } catch (error) {
+        console.error("Failed to load environment variables:", error);
+        throw error;
     }
-}
-if (!allVarsPresent) {
-    console.error('One or more critical environment variables are missing. Bot may not start correctly or at all.');
-    // Deno.exit(1); // If you uncommented this, the deployment would fail and Vercel would show it.
 }

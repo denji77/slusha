@@ -10,7 +10,7 @@ import { sliceMessage } from '../../helpers.ts';
 import { ChatMemory } from '../../memory.ts';
 import logger from '../../logger.ts';
 import { InlineQueryResultArticle } from 'grammy_types';
-import { generateText, Output } from 'ai';
+import { generateObject, generateText } from 'ai';
 import { google } from '@ai-sdk/google';
 import { safetySettings } from '../../config.ts';
 import z from 'zod';
@@ -28,25 +28,31 @@ bot.command('character', async (ctx) => {
     let replyText = '';
 
     if (textParts.length > 1) {
-        replyText +=
-            'Click the search button to find a character, no need to type in the command\n\n';
+        replyText += ctx.t('character-search-help');
     }
 
     let keyboard = new InlineKeyboard()
-        .switchInlineCurrent('Search', `@${ctx.chat.id} `);
+        .switchInlineCurrent(ctx.t('search'), `@${ctx.chat.id} `);
 
     const character = ctx.m.getChat().character;
 
-    const name = character?.name ?? 'Slusha';
+    const name = character?.name ?? ctx.t('slusha-name');
 
-    replyText = `${replyText}\n\nCurrent character: ${name}.\n`;
+    replyText = `${replyText}\n\n${ctx.t('character-current', { name })}\n`;
 
     if (character) {
-        keyboard = keyboard.text('Return Slusha', `set ${ctx.chat.id} default`);
-        replyText += `Names in chat: ${character.names.join(', ')}\n`;
+        keyboard = keyboard.text(
+            ctx.t('character-return-slusha'),
+            `set ${ctx.chat.id} default`,
+        );
+        replyText += `${
+            ctx.t('character-names-in-chat', {
+                names: character.names.join(', '),
+            })
+        }\n`;
     }
 
-    replyText += `\nFind a character from Chub.ai to set it in the chat`;
+    replyText += `\n${ctx.t('character-find-from-chub')}`;
 
     // Reply with search button
     await ctx.reply(
@@ -55,50 +61,49 @@ bot.command('character', async (ctx) => {
     );
 });
 
-const noChatIdErrorResult = InlineQueryResultBuilder
-    .article('696969', 'Нет поиска', {
-        description: 'Так просто искать нельзя, используй команду /character',
-    })
-    .text(
-        'Открой поиск через команду /character',
-    );
-
-function errorResult(chatId: number) {
+function noChatIdErrorResult(ctx: SlushaContext) {
     return InlineQueryResultBuilder
-        .article('696969', 'Поиск по имени персонажа в Chub.ai', {
-            description: 'Ошибка при поиске персонажа, попробуйте еще раз',
-            reply_markup: new InlineKeyboard()
-                .switchInlineCurrent('Поиск', `@${chatId} `),
+        .article('696969', ctx.t('character-no-search'), {
+            description: ctx.t('character-search-not-allowed'),
         })
-        .text('Ошибка при поиске персонажа');
+        .text(ctx.t('character-open-search'));
 }
 
-function headerResult(chatId: number, query: string) {
+function errorResult(chatId: number, ctx: SlushaContext) {
     return InlineQueryResultBuilder
-        .article('696969', 'Поиск по имени персонажа в Chub.ai', {
-            description:
-                'Подсказка: добавь /nsfw в запрос, чтобы включить nsfw результаты',
+        .article('696969', ctx.t('character-search-title'), {
+            description: ctx.t('character-search-error'),
+            reply_markup: new InlineKeyboard()
+                .switchInlineCurrent(ctx.t('search'), `@${chatId} `),
+        })
+        .text(ctx.t('character-search-error-text'));
+}
+
+function headerResult(chatId: number, query: string, ctx: SlushaContext) {
+    return InlineQueryResultBuilder
+        .article('696969', ctx.t('character-search-title'), {
+            description: ctx.t('character-nsfw-hint'),
             thumbnail_url: 'https://chub.ai/logo_cataract.png',
             reply_markup: new InlineKeyboard()
-                .switchInlineCurrent('Поиск', `@${chatId} ${query}`),
+                .switchInlineCurrent(ctx.t('search'), `@${chatId} ${query}`),
         })
-        .text('Персонажи отсюда: https://venus.chub.ai/characters');
+        .text(ctx.t('character-source-link'));
 }
 
-function notFoundResult(chatId: number) {
+function notFoundResult(chatId: number, ctx: SlushaContext) {
     return InlineQueryResultBuilder
         .article(
-            'Ничего не найдено',
-            'Попробуйте искать что-нибудь другое',
+            ctx.t('character-nothing-found'),
+            ctx.t('character-try-different-search'),
             {
-                description: 'Ничего не найдено',
+                description: ctx.t('character-nothing-found'),
                 thumbnail_url:
                     'https://imgs.search.brave.com/g1uD8EeI5LKrOZlyrIsyEtHoHvDxV4TWWjSqjQSsndQ/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9jZG4u/cGl4YWJheS5jb20v/cGhvdG8vMjAxNy8w/My8xMy8wNy8yOC9j/b21tdW5pY2F0aW9u/LTIxMzg5ODBfNjQw/LmpwZw',
                 reply_markup: new InlineKeyboard()
-                    .switchInlineCurrent('Поиск', `@${chatId} `),
+                    .switchInlineCurrent(ctx.t('search'), `@${chatId} `),
             },
         )
-        .text('Ничего не найдено');
+        .text(ctx.t('character-nothing-found'));
 }
 
 bot.inlineQuery(/.*/, async (ctx) => {
@@ -110,7 +115,7 @@ bot.inlineQuery(/.*/, async (ctx) => {
 
     const chatId = parseInt(args[0]?.replace('@', ''));
     if (isNaN(chatId)) {
-        return ctx.answerInlineQuery([noChatIdErrorResult]);
+        return ctx.answerInlineQuery([noChatIdErrorResult(ctx)]);
     }
     args.splice(0, 1);
 
@@ -148,15 +153,17 @@ bot.inlineQuery(/.*/, async (ctx) => {
         characters = await getCharacters(query, page, excludeNsfw);
     } catch (error) {
         logger.error('Could not get characters: ', error);
-        return ctx.answerInlineQuery([errorResult(chatId)], { cache_time: 0 });
+        return ctx.answerInlineQuery([errorResult(chatId, ctx)], {
+            cache_time: 0,
+        });
     }
 
     const results: InlineQueryResultArticle[] = [];
 
-    results.push(headerResult(chatId, query));
+    results.push(headerResult(chatId, query, ctx));
 
     if (characters.length === 0) {
-        results.push(notFoundResult(chatId));
+        results.push(notFoundResult(chatId, ctx));
         return ctx.answerInlineQuery(results);
     }
 
@@ -223,8 +230,8 @@ bot.inlineQuery(/.*/, async (ctx) => {
         text += ` <a href="${url}">${starCount}</a> ⭐`;
 
         const keyboard = new InlineKeyboard()
-            .switchInlineCurrent('Поиск', `@${chatId} `)
-            .text('Установить', `set ${chatId} ${character.id}`);
+            .switchInlineCurrent(ctx.t('search'), `@${chatId} `)
+            .text(ctx.t('character-set'), `set ${chatId} ${character.id}`);
 
         const result = InlineQueryResultBuilder
             .article(
@@ -249,23 +256,23 @@ bot.inlineQuery(/.*/, async (ctx) => {
     if (characters.length == pageSize) {
         const nextPageKeyboard = new InlineKeyboard()
             .switchInlineCurrent(
-                'Следующая страница',
+                ctx.t('character-next-page'),
                 `@${chatId} /p ${page + 1} ${query}`,
             );
 
         results.push(
             InlineQueryResultBuilder
                 .article(
-                    'Следующая страница',
-                    'кликай чтобы открыть следующую страницу',
+                    ctx.t('character-next-page'),
+                    ctx.t('character-click-next-page'),
                     {
-                        description: 'Поиск - Следующая страница',
+                        description: ctx.t('character-search-next-page'),
                         thumbnail_url:
                             'https://imgs.search.brave.com/6T6lo-oOr54SXQjAYk66hQUadauJQe69QkXl2EE-4Mw/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9nZXRk/cmF3aW5ncy5jb20v/ZnJlZS1pY29uL25l/eHQtcGFnZS1pY29u/LTY3LnBuZw',
                         reply_markup: nextPageKeyboard,
                     },
                 )
-                .text('Следующая страница'),
+                .text(ctx.t('character-next-page')),
         );
     }
 
@@ -279,7 +286,7 @@ bot.use(limit(
         limit: 1,
 
         onLimitExceeded: async (ctx) => {
-            await ctx.answerCallbackQuery('Слишком часто');
+            await ctx.answerCallbackQuery(ctx.t('character-rate-limit'));
         },
 
         keyGenerator: (ctx) => {
@@ -308,12 +315,12 @@ bot.callbackQuery(/set.*/, async (ctx) => {
     const chatId = parseInt(args[1]);
     const chat = ctx.memory.chats[chatId];
     if (isNaN(chatId) || chat === undefined) {
-        return ctx.answerCallbackQuery('Invalid chat id');
+        return ctx.answerCallbackQuery(ctx.t('character-invalid-chat-id'));
     }
 
     const userInChat = chat.members.find((member) => member.id === ctx.from.id);
     if (!userInChat) {
-        return ctx.answerCallbackQuery('You are not a member of this chat');
+        return ctx.answerCallbackQuery(ctx.t('character-not-member'));
     }
 
     // Manually set chat by query id cause it's not available in ctx
@@ -325,15 +332,17 @@ bot.callbackQuery(/set.*/, async (ctx) => {
 
     if (args[2] === 'default') {
         let slushaBackKeyboard = new InlineKeyboard()
-            .switchInlineCurrent('Поиск', `@${chatId} `);
+            .switchInlineCurrent(ctx.t('search'), `@${chatId} `);
 
         if (chat.character === undefined) {
-            return ctx.answerCallbackQuery('Slusha is already set');
+            return ctx.answerCallbackQuery(ctx.t('character-already-set'));
         } else {
             slushaBackKeyboard = new InlineKeyboard()
-                .switchInlineCurrent('Поиск', `@${chatId} `)
+                .switchInlineCurrent(ctx.t('search'), `@${chatId} `)
                 .text(
-                    `Return ${chat.character.name}`,
+                    ctx.t('character-return-character', {
+                        name: chat.character.name,
+                    }),
                     `set ${chatId} ${chat.character.id}`,
                 );
         }
@@ -342,10 +351,12 @@ bot.callbackQuery(/set.*/, async (ctx) => {
 
         try {
             await Promise.all([
-                ctx.answerCallbackQuery('Slusha is set'),
+                ctx.answerCallbackQuery(ctx.t('character-set-slusha')),
                 ctx.api.sendMessage(
                     chatId,
-                    `${ctx.from.first_name} returned Slusha`,
+                    ctx.t('character-user-returned-slusha', {
+                        userName: ctx.from.first_name,
+                    }),
                     {
                         reply_markup: slushaBackKeyboard,
                     },
@@ -360,16 +371,19 @@ bot.callbackQuery(/set.*/, async (ctx) => {
 
     const characterId = parseInt(args[2]);
     if (isNaN(characterId)) {
-        return ctx.answerCallbackQuery('Invalid character id');
+        return ctx.answerCallbackQuery(ctx.t('character-invalid-id'));
     }
 
     if (chat.character?.id === characterId) {
-        return ctx.answerCallbackQuery('This character is already set');
+        return ctx.answerCallbackQuery(ctx.t('character-already-exists'));
     }
 
     const keyboardProgress = new InlineKeyboard()
-        .switchInlineCurrent('Поиск', `@${chatId} `)
-        .text('Скачиваю...', `progress set ${chatId} ${characterId}`);
+        .switchInlineCurrent(ctx.t('search'), `@${chatId} `)
+        .text(
+            ctx.t('character-downloading'),
+            `progress set ${chatId} ${characterId}`,
+        );
 
     try {
         await ctx.editMessageReplyMarkup(
@@ -392,43 +406,94 @@ bot.callbackQuery(/set.*/, async (ctx) => {
         character = await getCharacter(characterId);
     } catch (error) {
         logger.error('Could not get character: ', error);
-        return ctx.answerCallbackQuery('Could not get character');
+        return ctx.answerCallbackQuery(ctx.t('character-not-found'));
     }
 
     const config = ctx.info.config;
+    // TODO: Allow to set different model for generating character names
     const model = chat.chatModel ?? config.model;
 
-    let namesResult;
+    const useJsonResponses = config.useJsonResponses;
+    let names: string[] = [];
     try {
-        namesResult = await generateText({
-            model: google(model, { safetySettings }),
-            experimental_output: Output.object({
-                // @ts-expect-error TODO: Fix types
+        if (useJsonResponses) {
+            const result = await generateObject({
+                model: google(model),
+                providerOptions: { google: { safetySettings } },
                 schema: z.array(z.string()),
-            }),
-            temperature: config.temperature,
-            topK: config.topK,
-            topP: config.topP,
-            prompt:
-                `Напиши варианты имени "${character.name}", которые пользователи могут использовать в качестве обращения к этому персонажу. ` +
-                'Варианты должны быть на русском, английском, уменьшительно ласкательные и очевидные похожие формы.\n' +
-                'Пример: имя "Cute Slusha". Варианты: ["Cute Slusha", "Slusha", "Слюша", "слюшаня", "слюшка", "шлюша", "слюш"]\n' +
-                'Пример: имя "Георгий". Варианты: ["Георгий", "Georgie", "George", "Geordie", "Geo", "Егор", "Герасим", "Жора", "Жорка", "Жорочка", "Гоша", "Гошенька", "Гера", "Герочка", "Гога"]',
-        });
+                temperature: config.temperature,
+                topK: config.topK,
+                topP: config.topP,
+                prompt:
+                    `Напиши варианты имени "${character.name}", которые пользователи могут использовать в качестве обращения к этому персонажу. ` +
+                    'Варианты должны быть на русском, английском, уменьшительно ласкательные и очевидные похожие формы.',
+                experimental_telemetry: {
+                    isEnabled: true,
+                    functionId: 'character-names',
+                    metadata: {
+                        sessionId: chatId.toString(),
+                        tags: ['character'],
+                    },
+                },
+            });
+            names = result.object;
+        } else {
+            const response = await generateText({
+                model: google(model),
+                providerOptions: { google: { safetySettings } },
+                temperature: config.temperature,
+                topK: config.topK,
+                topP: config.topP,
+                prompt:
+                    `Напиши варианты имени "${character.name}" (русские и английские, уменьшительные и очевидные похожие формы). ` +
+                    'Верни только список вариантов через запятую или с новой строки, без пояснений.',
+                experimental_telemetry: {
+                    isEnabled: true,
+                    functionId: 'character-names-dumb',
+                    metadata: {
+                        sessionId: chatId.toString(),
+                        tags: ['character'],
+                    },
+                },
+            });
+
+            const raw = response.text.trim();
+            const split = raw
+                .split(/\n|,|;|•|·|\u2022/g)
+                .map((s) => s.trim())
+                .map((s) => s.replace(/^[-*•·]\s*/, ''))
+                .map((s) => s.replace(/^"|"$/g, ''))
+                .filter((s) => s.length > 0 && s.length < 64);
+
+            const dedup = new Set<string>();
+            for (const s of split) {
+                const k = s.toLowerCase();
+                if (!dedup.has(k)) dedup.add(k);
+            }
+            names = Array.from(dedup).map((k) => {
+                // Recover original casing by finding first occurrence in split
+                const orig = split.find((s) => s.toLowerCase() === k);
+                return orig ?? k;
+            });
+
+            if (names.length === 0) {
+                names = [character.name];
+            }
+            if (names.length > 20) {
+                names = names.slice(0, 20);
+            }
+        }
     } catch (error) {
         logger.error(error, 'Error getting names for character');
-        return await ctx.reply(
-            'Ошибка при получении имен для персонажа. Попробуйте снова',
-        );
+        return await ctx.reply(ctx.t('character-names-error'));
     }
 
-    const names = namesResult.experimental_output as Array<string>;
     chat.character = { ...character, names };
 
     const keyboard = new InlineKeyboard()
-        .text('Return Slusha', `set ${chatId} default`)
-        .text('Set again', `set ${chatId} ${characterId}`)
-        .switchInlineCurrent('Поиск', `@${chatId} `);
+        .text(ctx.t('character-return-slusha'), `set ${chatId} default`)
+        .text(ctx.t('character-set-again'), `set ${chatId} ${characterId}`)
+        .switchInlineCurrent(ctx.t('search'), `@${chatId} `);
 
     try {
         await ctx.editMessageReplyMarkup(
@@ -447,15 +512,17 @@ bot.callbackQuery(/set.*/, async (ctx) => {
     }
 
     const keyboard2 = new InlineKeyboard()
-        .text('Return Slusha', `set ${chatId} default`)
-        .switchInlineCurrent('Поиск', `@${chatId} `);
+        .text(ctx.t('character-return-slusha'), `set ${chatId} default`)
+        .switchInlineCurrent(ctx.t('search'), `@${chatId} `);
 
     try {
         await ctx.api.sendMessage(
             chatId,
-            `${ctx.from.first_name} set the character ${character.name}.\n` +
-                `Names in chat: ${chat.character.names.join(', ')}` +
-                '\n\nIt might make sense to delete memory (/lobotomy), if it interferes with the new character.',
+            ctx.t('character-set-success', {
+                userName: ctx.from.first_name,
+                characterName: character.name,
+                names: chat.character.names.join(', '),
+            }),
             {
                 reply_markup: keyboard2,
             },
@@ -466,7 +533,9 @@ bot.callbackQuery(/set.*/, async (ctx) => {
 
     ctx.m.clear();
 
-    return ctx.answerCallbackQuery('Character is set to ' + character.name);
+    return ctx.answerCallbackQuery(
+        ctx.t('character-set-to', { name: character.name }),
+    );
 });
 
 export default bot;

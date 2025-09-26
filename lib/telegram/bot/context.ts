@@ -8,21 +8,23 @@ bot.command('context', async (ctx) => {
     const textParts = ctx.msg.text.split(' ').map((arg) => arg.trim());
     const config = ctx.info.config;
 
-    const currentValue = ctx.m.getChat().messagesToPass ?? config.messagesToPass;
+    const currentValue = ctx.m.getChat().messagesToPass ??
+        config.messagesToPass;
 
     if (textParts.length < 2) {
         return replyWithMarkdown(
             ctx,
-            'Provide the number of messages that I will remember - `/context 16`\n\n' +
-                'Smaller values give more accurate answers, larger values improve memory. Maximum 200.\n' +
-                `Current value - ${currentValue}. Provide \`default\` to return to the default number of messages (currently ${config.messagesToPass}, but may change with updates)`,
+            ctx.t('context-help', {
+                currentValue,
+                defaultValue: config.messagesToPass,
+            }),
         );
     }
 
     if (ctx.chat.type !== 'private') {
         const admins = await ctx.getChatAdministrators();
         if (!admins.some((a) => a.user.id === ctx.from?.id)) {
-            return ctx.reply('This command is only for chat administrators');
+            return ctx.reply(ctx.t('context-admin-only'));
         }
     }
 
@@ -30,24 +32,26 @@ bot.command('context', async (ctx) => {
         ctx.m.getChat().messagesToPass = undefined;
         return replyWithMarkdown(
             ctx,
-            `Number of messages set to default value (${config.messagesToPass})`,
+            ctx.t('context-default-set', {
+                defaultValue: config.messagesToPass,
+            }),
         );
     }
 
     const count = parseInt(textParts[1]);
     if (isNaN(count)) {
-        return ctx.reply('Could not understand the number of messages');
+        return ctx.reply(ctx.t('context-invalid-number'));
     }
 
     if (count < 1 || count > 200) {
-        return ctx.reply('The number of messages must be between 1 and 200');
+        return ctx.reply(ctx.t('context-out-of-range'));
     }
 
     ctx.m.getChat().messagesToPass = count;
 
-    let msg = `Number of messages set to ${count}`;
+    let msg = ctx.t('context-set', { count });
     if (count > 60) {
-        msg += '\n\n`TODO: allow large context`';
+        msg += '\n\n`TODO: запейволить большой контекст`';
     }
 
     return replyWithMarkdown(ctx, msg);

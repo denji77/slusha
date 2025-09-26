@@ -1,32 +1,36 @@
-# filepath: c:\Users\xdenj\OneDrive\Desktop\VS Code\slusha\Dockerfile
-# Use an updated official Deno image (Deno 1.41.3)
-FROM denoland/deno:alpine-1.41.3
+FROM denoland/deno:latest AS builder
 
-# Set the working directory
+ENV DENO_DIR=/app/.deno_cache
+
 WORKDIR /app
 
-# Install curl and ca-certificates using Alpine's package manager
-RUN apk update && apk add --no-cache curl ca-certificates
+COPY deno.json deno.lock ./
 
-# Copy necessary files, excluding those in .dockerignore
 COPY . .
 
-# Ensure the log directory exists
-RUN mkdir -p ./log
+RUN deno cache --allow-import --allow-scripts main.ts
 
-# Diagnostic curl command (optional, can be removed if deno cache works reliably)
-RUN echo "Attempting to curl a JSR module (diagnostic)..." && \
-    (curl -fvS https://jsr.io/@deno-library/logger@1.1.9/mod.ts && echo "Curl successful.") || echo "Curl command failed, but continuing to deno cache..."
+FROM denoland/deno:latest
 
-# Install dependencies without using the lock file
-RUN deno cache main.ts
+ENV DENO_DIR=/app/.deno_cache
+ENV DENO_NO_UPDATE_CHECK=1
+ENV DENO_NO_PROMPT=1
 
-# Expose the port (if applicable)
-EXPOSE 8080
+WORKDIR /app
 
-# Set environment variables
-ENV DENO_ENV=production
+COPY --from=builder --chown=deno:deno /app .
 
-# Run the application
-# Permissions: --allow-write=./tmp,./log grants write access to these specific dirs.
-CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write=./tmp,./log", "main.ts"]
+RUN mkdir -p ./tmp ./log && \
+    chown -R deno:deno ./tmp ./log
+
+USER deno
+
+CMD ["deno", "run", \
+     "--allow-env", \
+     "--allow-net", \
+     "--allow-read=.", \
+     "--allow-import", \
+     "--allow-write", \
+     "--allow-sys", \
+     "--unstable-detect-cjs", \
+     "main.ts"] 
