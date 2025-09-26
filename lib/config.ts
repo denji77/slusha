@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 
 function isValidRegex(val: unknown): val is RegExp {
     if (val instanceof RegExp) return true;
@@ -17,11 +16,28 @@ const configSchema = z.object({
         topP: z.number(),
         prePrompt: z.string(),
         prompt: z.string(),
+        dumbPrompt: z.string().optional(),
+        /**
+         * When false, bot will not expect JSON array output and will
+         * generate a single plain text message instead. Reactions are disabled.
+         */
+        useJsonResponses: z.boolean().default(true),
+        /**
+         * Optional alternative pre-prompt for dumb models that don't output JSON
+         */
+        dumbPrePrompt: z.string().optional(),
         privateChatPromptAddition: z.string().optional(),
         groupChatPromptAddition: z.string().optional(),
         commentsPromptAddition: z.string().optional(),
         hateModePrompt: z.string().optional(),
+        /**
+         * Smart-mode final prompt (expects JSON array response)
+         */
         finalPrompt: z.string(),
+        /**
+         * Optional alternative final prompt for dumb models (plain text)
+         */
+        dumbFinalPrompt: z.string().optional(),
         notesPrompt: z.string(),
         memoryPrompt: z.string(),
         memoryPromptRepeat: z.string(),
@@ -29,13 +45,20 @@ const configSchema = z.object({
         notesFrequency: z.number().default(150),
         memoryFrequency: z.number().default(50),
         messageMaxLength: z.number().default(4096),
+        /**
+         * Whether to include attachments (images, videos, voice, etc.)
+         * from user messages when constructing model history
+         */
+        includeAttachmentsInHistory: z.boolean().default(true),
         bytesLimit: z.number().default(20 * 1024 * 1024),
     }),
     startMessage: z.string(),
-    names: z.array(z.union([z.string(), z.custom(isValidRegex)])),
-    tendToReply: z.array(z.union([z.string(), z.custom(isValidRegex)])),
+    names: z.array(z.union([z.string(), z.custom<RegExp>(isValidRegex)])),
+    tendToReply: z.array(z.union([z.string(), z.custom<RegExp>(isValidRegex)])),
     tendToReplyProbability: z.number().default(50),
-    tendToIgnore: z.array(z.union([z.string(), z.custom(isValidRegex)])),
+    tendToIgnore: z.array(
+        z.union([z.string(), z.custom<RegExp>(isValidRegex)]),
+    ),
     tendToIgnoreProbability: z.number().default(90),
     randomReplyProbability: z.number().default(1),
     nepons: z.array(z.string()),
@@ -48,12 +71,7 @@ const configSchema = z.object({
     responseDelay: z.number().default(1),
 });
 
-type SafetySettings = Exclude<
-    Parameters<GoogleGenerativeAIProvider>[1],
-    undefined
->['safetySettings'];
-
-export const safetySettings: SafetySettings = [
+export const safetySettings: Array<{ category: string; threshold: string }> = [
     {
         category: 'HARM_CATEGORY_HARASSMENT',
         threshold: 'BLOCK_NONE',
@@ -74,10 +92,10 @@ export const safetySettings: SafetySettings = [
 
 export type UserConfig = z.infer<typeof configSchema>;
 
-const config = configSchema.merge(z.object({
+const config = configSchema.extend({
     botToken: z.string(),
     aiToken: z.string(),
-}));
+});
 
 export type Config = z.infer<typeof config>;
 

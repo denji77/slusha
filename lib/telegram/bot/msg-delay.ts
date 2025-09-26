@@ -10,24 +10,7 @@ export default function msgDelay(config: Config) {
     bot.on('message', (ctx, next) => {
         async function handleNext() {
             try {
-                //Start typing indicator before processing the message
-                const typing = doTyping(ctx, logger);
-                
-                //Store the original reply methods
-                const originalReply = ctx.reply;
-                
-                //Override the reply method to stop typing when a response is sent
-                ctx.reply = async (...args) => {
-                    //Stop the typing indicator before sending response
-                    typing.abort();
-                    //Call the original reply method
-                    return await originalReply.apply(ctx, args);
-                };
-                
                 await next();
-                
-                //If we got here and typing still active, stop plzz
-                typing.abort();
             } catch (error) {
                 logger.error('Could not handle message: ', error);
             }
@@ -50,7 +33,12 @@ export default function msgDelay(config: Config) {
                 logger.info(
                     'Replying but could not find last message from user',
                 );
-                await handleNext();
+                const typing = doTyping(ctx, logger);
+                try {
+                    await handleNext();
+                } finally {
+                    typing.abort();
+                }
                 return;
             }
 
@@ -65,8 +53,12 @@ export default function msgDelay(config: Config) {
                 ctx.info.userToReply = ctx.msg.from?.username ??
                     ctx.chat.first_name;
             }
-
-            await handleNext();
+            const typing = doTyping(ctx, logger);
+            try {
+                await handleNext();
+            } finally {
+                typing.abort();
+            }
         }, config.responseDelay * 1000);
     });
 

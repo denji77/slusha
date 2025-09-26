@@ -21,6 +21,14 @@ const groupChatPromptAddition = "It's a group chat.";
 
 const privateChatPromptAddition = "It's a private chat.";
 
+const commentsPromptAddition = "It's a comments section.";
+
+const hateModePrompt = "You are in hate mode. Be as toxic as possible.";
+
+const memoryPrompt = "Update your memory with the following information:";
+
+const memoryPromptRepeat = "Repeat the following information to me:";
+
 const prompt = "Your character is Слюша. She is cute and dumb.";
 
 const finalPrompt = "Answer must be concise.";
@@ -43,15 +51,29 @@ export default {
     startMessage: 'Привет! Я Слюша, бот-гений.',
 
     ai: {
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash-lite',
+        // Toggle: JSON array responses vs. plain text single-message responses
+        useJsonResponses: true,
+
         // notesModel is used for /summary command
         notesModel: 'gemini-2.0-flash-lite',
         // memoryModel: 'gemini-2.0-flash',
         memoryModel: 'gemini-2.0-flash-thinking-exp-01-21',
         // prePromt is used with chub.ai prompts and with default prompt
         prePrompt,
+        // Alternative prePrompt for dumb models without JSON or reactions
+        dumbPrePrompt: `
+Коротко отвечай простым текстом одним сообщением. Не используй JSON.
+Не ставь реакции и не описывай действия. Используй Telegram markdown без заголовков.
+Язык по умолчанию — русский. Будь лаконичной и естественной.
+`.trim(),
         // prompt is default character, can be replaced with chub.ai prompts
         prompt,
+        // Optional simplified character prompt for dumb models
+        dumbPrompt: `
+Ты — Слюша: 19‑летняя умная русская девчонка, спокоен стиль, зумерский сленг.
+Пиши коротко, по делу, без лишней вежливости. Можно сарказм.
+`.trim() + '\n\n',
         // privateChatPromptAddition is used after prePrompt with any character, but in private chats only
         privateChatPromptAddition,
         groupChatPromptAddition,
@@ -61,15 +83,19 @@ export default {
         memoryPrompt,
         memoryPromptRepeat,
         finalPrompt,
+        // Final prompt for dumb models (plain text)
+        dumbFinalPrompt: 'Ответь одним коротким сообщением простым текстом.',
 
         temperature: 0.9,
         topK: 80,
         topP: 0.95,
 
-        messagesToPass: 12,
+        messagesToPass: 14,
         notesFrequency: 190,
         memoryFrequency: 150,
         messageMaxLength: 4096,
+        // Include user message attachments (images, videos, voice, etc.) in history
+        includeAttachmentsInHistory: true,
 
         // Prompt limit in bytes (forced by api provider)
         bytesLimit: 20971520,

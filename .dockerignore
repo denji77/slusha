@@ -1,0 +1,6 @@
+*
+!/main.ts
+!/deno.json
+!/deno.lock
+!/lib/
+!/locales/

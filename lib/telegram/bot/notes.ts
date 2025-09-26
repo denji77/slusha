@@ -1,6 +1,6 @@
 import { Composer } from 'grammy';
 import { google } from 'npm:@ai-sdk/google';
-import { CoreMessage, generateText } from 'npm:ai';
+import { generateText, ModelMessage } from 'npm:ai';
 import { Config, safetySettings } from '../../config.ts';
 import logger from '../../logger.ts';
 import { SlushaContext } from '../setup-bot.ts';
@@ -37,7 +37,7 @@ export default function notes(config: Config, botId: number) {
 
             const characterName = ctx.m.getChat().character?.name;
 
-            let context: CoreMessage[] = [];
+            let context: ModelMessage[] = [];
             try {
                 context = await makeNotesHistory(
                     { token: config.botToken, id: botId },
@@ -59,7 +59,7 @@ export default function notes(config: Config, botId: number) {
             const model = config.ai.notesModel ?? config.ai.model;
             const prompt = config.ai.notesPrompt;
 
-            const messages: CoreMessage[] = [
+            const messages: ModelMessage[] = [
                 {
                     role: 'system',
                     content: prompt,
@@ -73,16 +73,31 @@ export default function notes(config: Config, botId: number) {
 
             const start = Date.now();
 
+            const tags = ['notes'];
+            if (ctx.chat.type === 'private') {
+                tags.push('private');
+            }
+
             let response;
             try {
                 response = await generateText({
-                    model: google(model, {
-                        safetySettings,
-                    }),
+                    model: google(model),
+                    providerOptions: { google: { safetySettings } },
                     messages,
                     temperature: config.ai.temperature,
                     topK: config.ai.topK,
                     topP: config.ai.topP,
+                    experimental_telemetry: {
+                        isEnabled: true,
+                        functionId: 'generate-notes',
+                        metadata: {
+                            sessionId: ctx.chat.id.toString(),
+                            tags,
+                            userId: ctx.chat.type === 'private'
+                                ? ctx.from?.id.toString()
+                                : '',
+                        },
+                    },
                 });
             } catch (error) {
                 logger.error('Could not get summary: ', error);
@@ -158,7 +173,7 @@ export default function notes(config: Config, botId: number) {
             const characterName = ctx.m.getChat().character?.name;
             const savedHistory = ctx.m.getHistory();
 
-            let context: CoreMessage[] = [];
+            let context: ModelMessage[] = [];
             try {
                 context = await makeNotesHistory(
                     { token: config.botToken, id: botId },
@@ -244,7 +259,7 @@ export default function notes(config: Config, botId: number) {
 
             const model = config.ai.memoryModel ?? config.ai.model;
 
-            const messages: CoreMessage[] = [
+            const messages: ModelMessage[] = [
                 {
                     role: 'system',
                     content: prompt,
@@ -260,16 +275,36 @@ export default function notes(config: Config, botId: number) {
 
             const start = Date.now();
 
+            const tags = ['memory'];
+            if (ctx.chat.type === 'private') {
+                tags.push('private');
+            }
+
             let response;
             try {
                 response = await generateText({
-                    model: google(model, {
-                        safetySettings,
-                    }),
+                    model: google(model),
+                    providerOptions: {
+                        google: {
+                            safetySettings,
+                            thinkingConfig: { thinkingBudget: 2048 },
+                        },
+                    },
                     messages,
                     temperature: config.ai.temperature,
                     topK: config.ai.topK,
                     topP: config.ai.topP,
+                    experimental_telemetry: {
+                        isEnabled: true,
+                        functionId: 'generate-memory',
+                        metadata: {
+                            sessionId: ctx.chat.id.toString(),
+                            tags,
+                            userId: ctx.chat.type === 'private'
+                                ? ctx.from?.id.toString()
+                                : '',
+                        },
+                    },
                 });
             } catch (error) {
                 logger.error('Could not get memory: ', error);
@@ -283,7 +318,7 @@ export default function notes(config: Config, botId: number) {
                 (Date.now() - start) / 1000,
             );
 
-            // logger.info('Memory generated:', response.text)
+            // logger.info(`Memory generated: \n${response.text}\n`);
 
             if (!response.text.trim()) {
                 logger.warn('Empty response from AI');

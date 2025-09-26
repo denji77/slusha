@@ -2,11 +2,11 @@ import { Config } from './config.ts';
 import ky from 'ky';
 import { Api, RawApi } from 'grammy';
 import { Logger } from '@deno-library/logger';
-import { ImagePart, supportedTypesMap } from './history.ts';
+import { supportedTypesMap } from './history.ts';
 import { exists } from '@std/fs';
 import { Message, PhotoSize, Sticker } from 'grammy_types';
-import { FileState, GoogleAIFileManager } from '@google/generative-ai/server';
-import { CoreMessage } from 'ai';
+import { GoogleGenAI } from '@google/genai';
+import { ImagePart, ModelMessage } from 'ai';
 import { BotCharacter } from './memory.ts';
 // import { encodeBase64 } from "@std/encoding/base64";
 
@@ -75,31 +75,41 @@ export function splitMessage(message: string, maxLength = 3000) {
     return parts;
 }
 
-const AI_TOKEN = Deno.env.get('AI_TOKEN');
+let ai: GoogleGenAI | null = null;
 
-if (!AI_TOKEN) {
-    throw new Error('AI_TOKEN is required');
+function getAI(): GoogleGenAI {
+    if (!ai) {
+        const AI_TOKEN = (globalThis as any).Deno.env.get('AI_TOKEN');
+        if (!AI_TOKEN) {
+            throw new Error('AI_TOKEN is required');
+        }
+        ai = new GoogleGenAI({ apiKey: AI_TOKEN });
+    }
+    return ai;
 }
 
-const fileManager = new GoogleAIFileManager(AI_TOKEN);
+async function uploadToGoogle(path: string, _name: string, mimeType: string) {
+    const fileData = await (globalThis as any).Deno.readFile(path);
+    const blob = new Blob([fileData], { type: mimeType });
 
-async function uploadToGoogle(path: string, name: string, mimeType: string) {
-    const uploadResult = await fileManager.uploadFile(path, {
-        mimeType,
-        displayName: name,
+    const aiInstance = getAI();
+    const uploadResult = await aiInstance.files.upload({
+        file: blob,
     });
 
-    let file = await fileManager.getFile(uploadResult.file.name);
-    while (file.state === FileState.PROCESSING) {
+    let file = uploadResult;
+    while (file.state === 'PROCESSING') {
         await new Promise((resolve) => setTimeout(resolve, 100));
-        file = await fileManager.getFile(uploadResult.file.name);
+        if (uploadResult.name) {
+            file = await aiInstance.files.get({ name: uploadResult.name });
+        }
     }
 
-    if (file.state === FileState.FAILED) {
+    if (file.state === 'FAILED') {
         throw new Error('Audio processing failed.');
     }
 
-    return file.uri;
+    return file.uri || '';
 }
 
 export async function downloadFile(
@@ -122,7 +132,7 @@ export async function downloadFile(
     const arrayBuffer = await ky.get(downloadUrl).arrayBuffer();
     const buffer = new Uint8Array(arrayBuffer);
 
-    await Deno.writeFile(filePath, buffer);
+    await (globalThis as any).Deno.writeFile(filePath, buffer);
 
     // return encodeBase64(buffer);
     return uploadToGoogle(filePath, fileId, mimeType);
@@ -132,14 +142,14 @@ export async function getImageContent(
     api: Api<RawApi>,
     token: string,
     fileId: string,
-    mimeType: string,
+    mediaType: string,
 ): Promise<ImagePart> {
-    const file = await downloadFile(api, token, fileId, mimeType);
+    const file = await downloadFile(api, token, fileId, mediaType);
 
     return {
         type: 'image',
         image: file,
-        mimeType,
+        mediaType,
     };
 }
 
@@ -167,20 +177,20 @@ export function chooseSize(photos: PhotoSize[]): PhotoSize {
  * @param maxAge Max age in hours
  */
 export async function deleteOldFiles(logger: Logger, maxAge: number) {
-    const files = Deno.readDir('./tmp');
+    const files = (globalThis as any).Deno.readDir('./tmp');
 
     let deletedCount = 0;
     for await (const file of files) {
         const filePath = `./tmp/${file.name}`;
 
-        const stat = await Deno.stat(filePath);
+        const stat = await (globalThis as any).Deno.stat(filePath);
 
         const mtime = stat.mtime?.getTime() ?? 0;
         const age = (Date.now() - mtime) / (1000 * 60 * 60);
 
         if (age > maxAge || stat.mtime === null) {
             try {
-                await Deno.remove(filePath);
+                await (globalThis as any).Deno.remove(filePath);
             } catch (error) {
                 logger.warn(`Failed to delete file: ${filePath}`, error);
             }
@@ -296,19 +306,30 @@ export function prettyDate() {
 }
 
 // Create a more robust name matching function
-export function createNameMatcher(names: string[]) {
-    // Process each name to handle special characters and create proper boundaries
-    const patterns = names.map((name) => {
-        const escapedName = escapeRegExp(name);
-        // Match names that are surrounded by spaces, punctuation, or at start/end of text
-        return `(?:^|[\\s.,!?;:'"\\[\\](){}])${escapedName}(?:[\\s.,!?;:'"\\[\\](){}]|$)`;
+export function createNameMatcher(names: Array<string | RegExp>) {
+    // Process each name or pattern, handling strings and regular expressions
+    const patterns = names.map((nameOrPattern) => {
+        if (typeof nameOrPattern === 'string') {
+            const escapedName = escapeRegExp(nameOrPattern);
+            // Match names that are surrounded by spaces, punctuation, or at start/end of text
+            return `(?:^|[\\s.,!?;:'"\\[\\](){}])${escapedName}(?:[\\s.,!?;:'"\\[\\](){}]|$)`;
+        }
+
+        // Use the provided RegExp's source directly
+        return nameOrPattern.source;
     });
 
     return new RegExp(patterns.join('|'), 'gmi');
 }
 
 export function formatReply(
-    m: CoreMessage | { text: string; reply_to?: string }[],
+    m:
+        | ModelMessage
+        | ({ text: string; reply_to?: string; offset?: number } | {
+            react: string;
+            reply_to?: string;
+            offset?: number;
+        })[],
     char?: BotCharacter,
 ) {
     const charName = char?.name ?? 'Slusha';
@@ -346,17 +367,25 @@ export function formatReply(
         let res = '';
 
         if (!('type' in c)) {
-            res = `    ${c.text}`;
+            if ('text' in c) {
+                res = `    ${c.text}`;
+            } else if ('react' in c) {
+                res = `    [react ${c.react}${
+                    c.reply_to ? ' -> ' + c.reply_to : ''
+                }${typeof c.offset === 'number' ? ' #' + c.offset : ''}]`;
+            } else {
+                res = '';
+            }
         } else {
             switch (c.type) {
                 case 'text':
                     res = c.text;
                     break;
                 case 'image':
-                    res = `    image: ${c.image} (${c.mimeType})`;
+                    res = `    image: ${c.image}`;
                     break;
                 case 'file':
-                    res = `    file: ${c.data} (${c.mimeType})`;
+                    res = `    file: ${c.data}`;
                     break;
                 default:
                     res = '';
